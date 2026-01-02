@@ -41,17 +41,6 @@ const getDayRange = (date: Date) => {
   return { start, end };
 };
 
-const resolveShopPlanKey = (plan: string | null | undefined) => {
-  if (!plan) return 'basic';
-  return String(plan).toLowerCase();
-};
-
-const getPenaltyDaysByPlan = (plan: string | null | undefined) => {
-  const key = resolveShopPlanKey(plan);
-  if (key.includes('maxima') || key === 'pro') return 4;
-  return 7;
-};
-
 const hasSocialHandle = (handles: { platform: SocialPlatform }[], platform: SocialPlatform) =>
   handles.some((handle) => handle.platform === platform);
 
@@ -328,38 +317,6 @@ export const reportStream = async (streamId: string, userId?: string) => {
       data: { reportCount: { increment: 1 } },
     });
 
-    if (updated.reportCount >= 5) {
-      const penaltyDays = getPenaltyDaysByPlan(stream.shop?.plan);
-      const suspendedUntil = new Date(Date.now() + penaltyDays * 24 * 60 * 60 * 1000);
-
-      await prisma.stream.update({
-        where: { id: streamId },
-        data: {
-          status: StreamStatus.MISSED,
-          hidden: true,
-          endTime: new Date(),
-        },
-      });
-
-      await prisma.shop.update({
-        where: { id: stream.shopId },
-        data: {
-          status: ShopStatus.AGENDA_SUSPENDED,
-          statusReason: 'Bloqueo automatico por reportes',
-          statusChangedAt: new Date(),
-          agendaSuspendedUntil: suspendedUntil,
-          agendaSuspendedReason: '5 reportes validados',
-        },
-      });
-
-      await prisma.penalty.create({
-        data: {
-          shopId: stream.shopId,
-          reason: '5 reportes validados: vivo no realizado',
-          active: true,
-        },
-      });
-    }
   }
 
   return report;

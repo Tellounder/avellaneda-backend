@@ -7,7 +7,8 @@
     "dev": "ts-node-dev --respawn --transpile-only src/app/server.ts",
     "backfill:authusers": "ts-node scripts/backfill-authusers.ts",
     "backfill:quotawallets": "ts-node scripts/backfill-quotawallets.ts",
-    "doctor": "powershell -ExecutionPolicy Bypass -File .\\scripts\\doctor-p3p4.ps1"
+    "doctor": "powershell -ExecutionPolicy Bypass -File .\\scripts\\doctor-p3p4.ps1",
+    "sanctions:run": "ts-node scripts/run-sanciones.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.15.0",

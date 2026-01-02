@@ -107,6 +107,26 @@ enum ReportStatus {
   REJECTED
 }
 
+enum LiveScheduleAction {
+  CREATE
+  EDIT
+  CANCEL
+  AUTO_REPROGRAM
+  SET_PENDING_REPROGRAM
+  ADMIN_OVERRIDE
+  AUTO_START
+  AUTO_FINISH
+}
+
+enum AuditEntityType {
+  SHOP
+  LIVE
+  REEL
+  PURCHASE
+  SUSPENSION
+  NOTIFICATION
+}
+
 model AuthUser {
   id           String          @id @default(uuid())
   email        String          @unique
@@ -128,6 +148,7 @@ model Admin {
   adminStatus AdminStatus @default(ACTIVE)
   createdAt   DateTime    @default(now())
   approvedPurchaseRequests PurchaseRequest[] @relation("ApprovedByAdmin")
+  createdAgendaSuspensions AgendaSuspension[] @relation("AgendaSuspensionCreatedBy")
 }
 
 model Client {
@@ -192,6 +213,8 @@ model Shop {
   quotaWallet     QuotaWallet?
   quotaTransactions QuotaTransaction[]
   purchaseRequests PurchaseRequest[]
+  agendaSuspensions AgendaSuspension[]
+  liveScheduleEvents LiveScheduleEvent[]
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -230,6 +253,7 @@ model Stream {
   reports     Report[]
   reviews     Review[]
   agenda      Agenda[]
+  scheduleEvents LiveScheduleEvent[]
   createdAt   DateTime  @default(now())
 }
 
@@ -359,6 +383,44 @@ model PurchaseRequest {
   approvedByAdmin   Admin?         @relation("ApprovedByAdmin", fields: [approvedByAdminId], references: [authUserId])
   paymentProofUrl   String?
   notes             String?
+}
+
+model AgendaSuspension {
+  suspensionId      String   @id @default(uuid())
+  shopId            String
+  shop              Shop     @relation(fields: [shopId], references: [id])
+  startAt           DateTime
+  endAt             DateTime
+  reason            String
+  createdByAdminId  String?
+  createdByAdmin    Admin?   @relation("AgendaSuspensionCreatedBy", fields: [createdByAdminId], references: [authUserId])
+  createdAt         DateTime @default(now())
+}
+
+model LiveScheduleEvent {
+  eventId          String             @id @default(uuid())
+  liveId           String
+  live             Stream             @relation(fields: [liveId], references: [id])
+  shopId           String
+  shop             Shop               @relation(fields: [shopId], references: [id])
+  action           LiveScheduleAction
+  fromScheduledAt  DateTime?
+  toScheduledAt    DateTime?
+  reason           String?
+  actorType        QuotaActorType
+  actorId          String?
+  createdAt        DateTime           @default(now())
+}
+
+model AuditLog {
+  auditId     String          @id @default(uuid())
+  actorType   QuotaActorType
+  actorId     String?
+  action      String
+  entityType  AuditEntityType
+  entityId    String?
+  meta        Json?
+  createdAt   DateTime        @default(now())
 }
 
 

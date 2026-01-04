@@ -79,7 +79,7 @@ const syncAuthUserStatus = async (
   });
 };
 
-const getWhatsappLimit = (plan: unknown) => {
+export const getWhatsappLimit = (plan: unknown) => {
   if (!plan) return 1;
   const key = String(plan).toLowerCase();
   return PLAN_WHATSAPP_LIMIT[key] || 1;

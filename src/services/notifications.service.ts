@@ -17,6 +17,12 @@ export const getNotificationsByUser = async (userId: string) => {
   });
 };
 
+export const getNotificationById = async (id: string) => {
+  return prisma.notification.findUnique({
+    where: { id },
+  });
+};
+
 export const markAsRead = async (id: string) => {
   return prisma.notification.update({
     where: { id },

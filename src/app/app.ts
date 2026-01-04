@@ -12,12 +12,33 @@ import penaltiesRoutes from '../routes/penalties.routes';
 import agendaRoutes from '../routes/agenda.routes';
 import testPanelRoutes from '../routes/testpanel.routes';
 import notificationsRoutes from '../routes/notifications.routes';
+import authRoutes from '../routes/auth.routes';
+import { optionalAuth } from '../middleware/auth';
 
 const app = express();
 
-app.use(cors());
+const corsOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+app.use(
+  cors(
+    corsOrigins.length
+      ? {
+          origin: (origin, callback) => {
+            if (!origin || corsOrigins.includes(origin)) {
+              return callback(null, true);
+            }
+            return callback(new Error('Origen no permitido por CORS'));
+          },
+        }
+      : undefined
+  )
+);
 app.use(express.json());
 app.use(morgan('dev'));
+app.use(optionalAuth);
 
 app.use('/streams', streamsRoutes);
 app.use('/reels', reelsRoutes);
@@ -29,5 +50,6 @@ app.use('/penalties', penaltiesRoutes);
 app.use('/agenda', agendaRoutes);
 app.use('/testpanel', testPanelRoutes);
 app.use('/notifications', notificationsRoutes);
+app.use('/auth', authRoutes);
 
 export default app;

@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import * as PenaltiesController from '../controllers/penalties.controller';
+import { requireAdmin } from '../middleware/auth';
 
 const router = Router();
 
-router.get('/', PenaltiesController.getPenalties);
-router.post('/:shopId/apply', PenaltiesController.applyPenalty);
-router.post('/:shopId/remove', PenaltiesController.removePenalty);
+router.get('/', requireAdmin, PenaltiesController.getPenalties);
+router.post('/:shopId/apply', requireAdmin, PenaltiesController.applyPenalty);
+router.post('/:shopId/remove', requireAdmin, PenaltiesController.removePenalty);
 
 export default router;

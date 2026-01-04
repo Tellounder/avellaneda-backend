@@ -30,6 +30,15 @@ export const getAllReelsAdmin = async (req: Request, res: Response) => {
 };
 
 export const createReel = async (req: Request, res: Response) => {
+  if (!req.auth) {
+    return res.status(401).json({ message: 'Autenticacion requerida.' });
+  }
+  if (req.auth.userType === 'SHOP' && req.auth.shopId !== req.body?.shopId) {
+    return res.status(403).json({ message: 'Acceso denegado.' });
+  }
+  if (req.auth.userType !== 'SHOP' && req.auth.userType !== 'ADMIN') {
+    return res.status(403).json({ message: 'Permisos insuficientes.' });
+  }
   const { shopId, url, platform } = req.body;
   const data = await ReelsService.createReel(shopId, url, platform);
   res.json(sanitizeReelPayload(data));

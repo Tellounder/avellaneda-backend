@@ -272,7 +272,7 @@ export const deleteStream = async (id: string) => {
   return prisma.stream.delete({ where: { id } });
 };
 
-export const reportStream = async (streamId: string, userId?: string) => {
+export const reportStream = async (streamId: string, userId: string) => {
   const stream = await prisma.stream.findUnique({
     where: { id: streamId },
     include: { shop: true },
@@ -281,13 +281,11 @@ export const reportStream = async (streamId: string, userId?: string) => {
     throw new Error('Vivo no encontrado.');
   }
 
-  if (userId) {
-    const existingReport = await prisma.report.findFirst({
-      where: { streamId, userId },
-    });
-    if (existingReport) {
-      throw new Error('Ya reportaste este vivo.');
-    }
+  const existingReport = await prisma.report.findFirst({
+    where: { streamId, userId },
+  });
+  if (existingReport) {
+    throw new Error('Ya reportaste este vivo.');
   }
 
   const scheduledAt = stream.scheduledAt;
@@ -312,11 +310,10 @@ export const reportStream = async (streamId: string, userId?: string) => {
   });
 
   if (shouldCount) {
-    const updated = await prisma.stream.update({
+    await prisma.stream.update({
       where: { id: streamId },
       data: { reportCount: { increment: 1 } },
     });
-
   }
 
   return report;

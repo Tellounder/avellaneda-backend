@@ -9,7 +9,7 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
     return next();
   }
 
-  if (!firebaseReady) {
+  if (!firebaseReady || !firebaseAuth) {
     return res.status(500).json({ message: 'Firebase Admin no configurado.' });
   }
 

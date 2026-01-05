@@ -16,5 +16,5 @@ if (!admin.apps.length && hasCredentials) {
   });
 }
 
-export const firebaseAuth = admin.auth();
 export const firebaseReady = hasCredentials;
+export const firebaseAuth = admin.apps.length ? admin.auth() : null;

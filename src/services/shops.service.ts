@@ -203,7 +203,7 @@ export const createShop = async (data: any) => {
         website: data.website,
         razonSocial: data.razonSocial,
         cuit: data.cuit,
-        email: data.email,
+        email: normalizedEmail || data.email,
         password: data.password,
         address: data.address,
         addressDetails: data.addressDetails || {},
@@ -380,6 +380,53 @@ export const buyReelQuota = async (id: string, amount: number) => {
         penalties: true,
       },
     });
+  });
+};
+
+export const assignOwner = async (shopId: string, payload: { authUserId?: string; email?: string }) => {
+  const shop = await prisma.shop.findUnique({ where: { id: shopId } });
+  if (!shop) {
+    throw new Error('Tienda no encontrada.');
+  }
+
+  const authUserId = payload?.authUserId?.trim();
+  const email = normalizeEmail(payload?.email);
+  let authUser = null;
+
+  if (authUserId) {
+    authUser = await prisma.authUser.findUnique({ where: { id: authUserId } });
+  }
+
+  if (!authUser && email) {
+    authUser = await prisma.authUser.findUnique({ where: { email } });
+  }
+
+  if (!authUser) {
+    throw new Error('Usuario no encontrado. Debe iniciar sesión al menos una vez.');
+  }
+
+  if (authUser.userType === AuthUserType.ADMIN) {
+    throw new Error('No se puede asignar un admin como dueño de tienda.');
+  }
+
+  return prisma.$transaction(async (tx) => {
+    await tx.authUser.update({
+      where: { id: authUser.id },
+      data: { userType: AuthUserType.SHOP },
+    });
+
+    const updatedShop = await tx.shop.update({
+      where: { id: shopId },
+      data: { authUserId: authUser.id },
+      include: {
+        socialHandles: true,
+        whatsappLines: true,
+        penalties: true,
+      },
+    });
+
+    await syncAuthUserStatus(authUser.id, updatedShop.status, updatedShop.active, tx);
+    return updatedShop;
   });
 };
 

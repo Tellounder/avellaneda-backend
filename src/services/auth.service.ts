@@ -86,6 +86,38 @@ export const resolveAuthContext = async (uid: string, email: string): Promise<Au
     };
   }
 
+  const emailLinkedShop = await prisma.shop.findFirst({
+    where: {
+      email: {
+        equals: normalizedEmail,
+        mode: 'insensitive',
+      },
+    },
+    select: { id: true, authUserId: true, requiresEmailFix: true },
+  });
+  if (emailLinkedShop) {
+    await prisma.$transaction(async (tx) => {
+      if (emailLinkedShop.authUserId !== authUser.id || emailLinkedShop.requiresEmailFix) {
+        await tx.shop.update({
+          where: { id: emailLinkedShop.id },
+          data: { authUserId: authUser.id, requiresEmailFix: false },
+        });
+      }
+      await tx.authUser.update({
+        where: { id: authUser.id },
+        data: { userType: AuthUserType.SHOP },
+      });
+    });
+    return {
+      uid,
+      email: normalizedEmail,
+      authUserId: authUser.id,
+      userType: AuthUserType.SHOP,
+      status: authUser.status,
+      shopId: emailLinkedShop.id,
+    };
+  }
+
   await prisma.client.upsert({
     where: { authUserId: authUser.id },
     update: {},

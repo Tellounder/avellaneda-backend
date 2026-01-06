@@ -151,7 +151,9 @@ export const reportStream = async (req: Request, res: Response) => {
     if (!req.auth || req.auth.userType !== 'CLIENT') {
       return res.status(403).json({ message: 'Debes iniciar sesion como cliente.' });
     }
-    const data = await StreamsService.reportStream(req.params.id, req.auth.authUserId);
+    const data = await StreamsService.reportStream(req.params.id, req.auth.authUserId, {
+      reason: req.body?.reason,
+    });
     res.json(data);
   } catch (error: any) {
     res.status(400).json({ message: error.message || 'Error al reportar vivo', error });
@@ -163,7 +165,7 @@ export const rateStream = async (req: Request, res: Response) => {
     if (!req.auth || req.auth.userType !== 'CLIENT') {
       return res.status(403).json({ message: 'Debes iniciar sesion como cliente.' });
     }
-    const data = await StreamsService.rateStream(req.params.id, req.body);
+    const data = await StreamsService.rateStream(req.params.id, req.body, req.auth.authUserId);
     res.json(data);
   } catch (error) {
     res.status(500).json({ message: 'Error al calificar vivo', error });

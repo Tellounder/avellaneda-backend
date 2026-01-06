@@ -17,8 +17,12 @@ const normalizePlatform = (value: unknown): SocialPlatform => {
 };
 
 export const getActiveReels = async () => {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
   return prisma.reel.findMany({
-    where: { hidden: false },
+    where: {
+      hidden: false,
+      createdAt: { gte: cutoff },
+    },
     orderBy: { createdAt: 'desc' },
     include: { shop: true },
   });

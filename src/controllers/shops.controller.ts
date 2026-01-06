@@ -145,3 +145,12 @@ export const resetShopPassword = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Error al resetear clave', error });
   }
 };
+
+export const assignOwner = async (req: Request, res: Response) => {
+  try {
+    const data = await ShopsService.assignOwner(req.params.id, req.body);
+    res.json(sanitizeShopPayload(data, req));
+  } catch (error: any) {
+    res.status(400).json({ message: error.message || 'Error al asignar dueño', error });
+  }
+};

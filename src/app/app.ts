@@ -13,6 +13,7 @@ import agendaRoutes from '../routes/agenda.routes';
 import testPanelRoutes from '../routes/testpanel.routes';
 import notificationsRoutes from '../routes/notifications.routes';
 import authRoutes from '../routes/auth.routes';
+import clientsRoutes from '../routes/clients.routes';
 import { optionalAuth } from '../middleware/auth';
 
 const app = express();
@@ -51,5 +52,6 @@ app.use('/agenda', agendaRoutes);
 app.use('/testpanel', testPanelRoutes);
 app.use('/notifications', notificationsRoutes);
 app.use('/auth', authRoutes);
+app.use('/clients', clientsRoutes);
 
 export default app;

@@ -13,6 +13,7 @@ router.get('/:id', ShopsController.getShopById);
 router.put('/:id', requireShopOrAdmin((req) => req.params.id), ShopsController.updateShop);
 router.post('/:id/buy-stream-quota', requireShopOrAdmin((req) => req.params.id), ShopsController.buyStreamQuota);
 router.post('/:id/buy-reel-quota', requireShopOrAdmin((req) => req.params.id), ShopsController.buyReelQuota);
+router.post('/:id/assign-owner', requireAdmin, ShopsController.assignOwner);
 router.post('/:id/toggle-penalty', requireAdmin, ShopsController.togglePenalty);
 router.post('/:id/activate', requireAdmin, ShopsController.activateShop);
 router.post('/:id/reject', requireAdmin, ShopsController.rejectShop);

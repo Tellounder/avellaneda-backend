@@ -7,12 +7,22 @@ export const getReviewsByStream = async (streamId: string) => {
   });
 };
 
-export const createReview = async (streamId: string, data: any) => {
+export const createReview = async (streamId: string, data: any, userId: string) => {
   const rating = Number(data?.rating);
+  if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+    throw new Error('La calificación debe estar entre 1 y 5.');
+  }
+  const existingReview = await prisma.review.findFirst({
+    where: { streamId, userId },
+  });
+  if (existingReview) {
+    throw new Error('Ya calificaste este vivo.');
+  }
   return prisma.review.create({
     data: {
       streamId,
-      rating: isNaN(rating) ? 0 : rating,
+      userId,
+      rating,
       comment: data?.comment,
     },
   });

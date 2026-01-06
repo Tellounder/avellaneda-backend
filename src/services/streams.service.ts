@@ -272,13 +272,16 @@ export const deleteStream = async (id: string) => {
   return prisma.stream.delete({ where: { id } });
 };
 
-export const reportStream = async (streamId: string, userId: string) => {
+export const reportStream = async (streamId: string, userId: string, payload?: { reason?: string }) => {
   const stream = await prisma.stream.findUnique({
     where: { id: streamId },
     include: { shop: true },
   });
   if (!stream) {
     throw new Error('Vivo no encontrado.');
+  }
+  if (stream.status !== StreamStatus.FINISHED) {
+    throw new Error('Solo puedes reportar vivos finalizados.');
   }
 
   const existingReport = await prisma.report.findFirst({
@@ -288,43 +291,54 @@ export const reportStream = async (streamId: string, userId: string) => {
     throw new Error('Ya reportaste este vivo.');
   }
 
-  const scheduledAt = stream.scheduledAt;
-  const diffMinutes = (Date.now() - scheduledAt.getTime()) / 60000;
-  if (diffMinutes < 0) {
-    throw new Error('El vivo aun no inicio.');
-  }
-  if (diffMinutes > 30) {
-    throw new Error('La ventana de reporte ha finalizado.');
-  }
-
-  const shouldCount = diffMinutes >= 5;
+  const reason = String(payload?.reason || '').trim() || 'Sin motivo';
 
   const report = await prisma.report.create({
     data: {
       streamId,
       userId: userId || null,
-      reason: 'Inappropriate content',
+      reason,
       resolved: false,
       status: ReportStatus.OPEN,
     },
   });
 
-  if (shouldCount) {
-    await prisma.stream.update({
-      where: { id: streamId },
-      data: { reportCount: { increment: 1 } },
-    });
-  }
+  await prisma.stream.update({
+    where: { id: streamId },
+    data: { reportCount: { increment: 1 } },
+  });
 
   return report;
 };
 
-export const rateStream = async (streamId: string, data: any) => {
+export const rateStream = async (streamId: string, data: any, userId?: string) => {
+  const stream = await prisma.stream.findUnique({ where: { id: streamId } });
+  if (!stream) {
+    throw new Error('Vivo no encontrado.');
+  }
+  if (stream.status !== StreamStatus.FINISHED) {
+    throw new Error('Solo puedes calificar vivos finalizados.');
+  }
+  if (!userId) {
+    throw new Error('Usuario requerido para calificar.');
+  }
   const rating = Number(data?.rating);
+  if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+    throw new Error('La calificación debe estar entre 1 y 5.');
+  }
+
+  const existingReview = await prisma.review.findFirst({
+    where: { streamId, userId },
+  });
+  if (existingReview) {
+    throw new Error('Ya calificaste este vivo.');
+  }
+
   return prisma.review.create({
     data: {
       streamId,
-      rating: isNaN(rating) ? 0 : rating,
+      userId,
+      rating,
       comment: data?.comment,
     },
   });

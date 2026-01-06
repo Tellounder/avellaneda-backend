@@ -139,6 +139,7 @@ model AuthUser {
   shop         Shop?
   admin        Admin?
   client       Client?
+  reviews      Review[]
 }
 
 model Admin {
@@ -292,9 +293,13 @@ model Review {
   id        String   @id @default(uuid())
   streamId  String
   stream    Stream   @relation(fields: [streamId], references: [id])
+  userId    String
+  user      AuthUser @relation(fields: [userId], references: [id])
   rating    Int
   comment   String?
   createdAt DateTime @default(now())
+
+  @@unique([streamId, userId])
 }
 
 model Report {
@@ -422,5 +427,4 @@ model AuditLog {
   meta        Json?
   createdAt   DateTime        @default(now())
 }
-
 

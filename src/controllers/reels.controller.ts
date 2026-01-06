@@ -29,6 +29,11 @@ export const getAllReelsAdmin = async (req: Request, res: Response) => {
   res.json(sanitizeReelPayload(data));
 };
 
+export const getReelsByShop = async (req: Request, res: Response) => {
+  const data = await ReelsService.getReelsByShop(req.params.shopId);
+  res.json(sanitizeReelPayload(data));
+};
+
 export const createReel = async (req: Request, res: Response) => {
   if (!req.auth) {
     return res.status(401).json({ message: 'Autenticacion requerida.' });

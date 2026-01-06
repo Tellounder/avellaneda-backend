@@ -134,28 +134,74 @@ const buildWhatsappLines = (input: unknown) => {
     .filter(Boolean) as { label: string; number: string }[];
 };
 
+const shopInclude = {
+  socialHandles: true,
+  whatsappLines: true,
+  penalties: true,
+  quotaWallet: true,
+};
+
 export const getShops = async () => {
+  const shops = await prisma.shop.findMany({
+    orderBy: { name: 'asc' },
+    include: shopInclude,
+  });
+
+  const missingWallet = shops.filter((shop) => !shop.quotaWallet);
+  if (missingWallet.length === 0) {
+    return shops;
+  }
+
+  for (const shop of missingWallet) {
+    await createQuotaWalletFromLegacy(
+      {
+        id: shop.id,
+        plan: shop.plan,
+        streamQuota: shop.streamQuota,
+        reelQuota: shop.reelQuota,
+      },
+      prisma
+    );
+  }
+
   return prisma.shop.findMany({
     orderBy: { name: 'asc' },
-    include: {
-      socialHandles: true,
-      whatsappLines: true,
-      penalties: true,
-    },
+    include: shopInclude,
   });
 };
 
 export const getShopById = async (id: string) => {
-  return prisma.shop.findUnique({
+  const shop = await prisma.shop.findUnique({
     where: { id },
     include: {
       streams: true,
       reels: true,
-      socialHandles: true,
-      whatsappLines: true,
-      penalties: true,
+      ...shopInclude,
     },
   });
+  if (!shop) {
+    return shop;
+  }
+  if (!shop.quotaWallet) {
+    await createQuotaWalletFromLegacy(
+      {
+        id: shop.id,
+        plan: shop.plan,
+        streamQuota: shop.streamQuota,
+        reelQuota: shop.reelQuota,
+      },
+      prisma
+    );
+    return prisma.shop.findUnique({
+      where: { id },
+      include: {
+        streams: true,
+        reels: true,
+        ...shopInclude,
+      },
+    });
+  }
+  return shop;
 };
 
 export const createShop = async (data: any) => {

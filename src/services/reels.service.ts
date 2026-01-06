@@ -35,6 +35,14 @@ export const getAllReelsAdmin = async () => {
   });
 };
 
+export const getReelsByShop = async (shopId: string) => {
+  return prisma.reel.findMany({
+    where: { shopId },
+    orderBy: { createdAt: 'desc' },
+    include: { shop: true },
+  });
+};
+
 export const createReel = async (shopId: string, url: string, platform: string) => {
   const normalizedPlatform = normalizePlatform(platform);
   return prisma.$transaction(async (tx) => {

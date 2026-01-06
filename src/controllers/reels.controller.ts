@@ -60,6 +60,9 @@ export const reactivateReel = async (req: Request, res: Response) => {
 };
 
 export const registerView = async (req: Request, res: Response) => {
-  const data = await ReelsService.registerView(req.params.id);
+  if (!req.auth) {
+    return res.status(401).json({ message: 'Autenticacion requerida.' });
+  }
+  const data = await ReelsService.registerView(req.params.id, req.auth.authUserId);
   res.json(data);
 };

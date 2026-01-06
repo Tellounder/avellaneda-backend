@@ -127,6 +127,12 @@ enum AuditEntityType {
   NOTIFICATION
 }
 
+enum NotificationType {
+  SYSTEM
+  REMINDER
+  PURCHASE
+}
+
 model AuthUser {
   id           String          @id @default(uuid())
   email        String          @unique
@@ -140,6 +146,10 @@ model AuthUser {
   admin        Admin?
   client       Client?
   reviews      Review[]
+  favorites    Favorite[]
+  agenda       Agenda[]
+  notifications Notification[]
+  reelViews    ReelView[]
 }
 
 model Admin {
@@ -164,9 +174,6 @@ model User {
   id            String         @id @default(uuid())
   name          String
   email         String         @unique
-  favorites     Favorite[]
-  agenda        Agenda[]
-  notifications Notification[]
   createdAt     DateTime       @default(now())
 }
 
@@ -185,7 +192,7 @@ model Shop {
   // --- NUEVOS CAMPOS LEGALES ---
   razonSocial     String?
   cuit            String?
-  email           String?
+  email           String?  @unique
   password        String?
   address         String?
   addressDetails  Json?
@@ -197,6 +204,7 @@ model Shop {
   status          ShopStatus @default(PENDING_VERIFICATION)
   statusReason    String?
   statusChangedAt DateTime?
+  ownerAcceptedAt DateTime?
   agendaSuspendedUntil DateTime?
   agendaSuspendedByAdminId String?
   agendaSuspendedReason String?
@@ -267,6 +275,7 @@ model Reel {
   hidden    Boolean  @default(false)
   views     Int      @default(0)
   createdAt DateTime @default(now())
+  reelViews ReelView[]
 }
 
 model ShopSocialHandle {
@@ -325,26 +334,44 @@ model Penalty {
 model Favorite {
   id     String @id @default(uuid())
   userId String
-  user   User   @relation(fields: [userId], references: [id])
+  user   AuthUser   @relation(fields: [userId], references: [id])
   shopId String
   shop   Shop   @relation(fields: [shopId], references: [id])
+
+  @@unique([userId, shopId])
 }
 
 model Agenda {
   id       String @id @default(uuid())
   userId   String
-  user     User   @relation(fields: [userId], references: [id])
+  user     AuthUser   @relation(fields: [userId], references: [id])
   streamId String
   stream   Stream @relation(fields: [streamId], references: [id])
+
+  @@unique([userId, streamId])
 }
 
 model Notification {
   id        String   @id @default(uuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  user      AuthUser     @relation(fields: [userId], references: [id])
   message   String
+  type      NotificationType @default(SYSTEM)
+  refId     String?
+  notifyAt  DateTime?
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
+}
+
+model ReelView {
+  id        String   @id @default(uuid())
+  reelId    String
+  reel      Reel     @relation(fields: [reelId], references: [id])
+  userId    String
+  user      AuthUser @relation(fields: [userId], references: [id])
+  seenAt    DateTime @default(now())
+
+  @@unique([reelId, userId])
 }
 
 model QuotaWallet {
@@ -427,4 +454,3 @@ model AuditLog {
   meta        Json?
   createdAt   DateTime        @default(now())
 }
-

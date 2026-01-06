@@ -93,9 +93,25 @@ export const reactivateReel = async (id: string) => {
   });
 };
 
-export const registerView = async (id: string) => {
-  return prisma.reel.update({
+export const registerView = async (id: string, userId: string) => {
+  const existing = await prisma.reelView.findFirst({
+    where: { reelId: id, userId },
+  });
+  if (existing) {
+    return existing;
+  }
+
+  await prisma.reelView.create({
+    data: {
+      reelId: id,
+      userId,
+    },
+  });
+
+  await prisma.reel.update({
     where: { id },
     data: { views: { increment: 1 } },
   });
+
+  return { reelId: id, userId };
 };

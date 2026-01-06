@@ -5,7 +5,7 @@ export const getTestPanelData = async () => {
     streams: await prisma.stream.count(),
     reels: await prisma.reel.count(),
     shops: await prisma.shop.count(),
-    users: await prisma.user.count(),
+    users: await prisma.authUser.count(),
     reports: await prisma.report.count(),
   };
 };
@@ -23,7 +23,9 @@ export const resetTestPanel = async () => {
   await prisma.shopSocialHandle.deleteMany();
   await prisma.shopWhatsappLine.deleteMany();
 
-  await prisma.user.deleteMany();
+  await prisma.authUser.deleteMany({
+    where: { userType: 'CLIENT' },
+  });
   await prisma.shop.deleteMany();
 
   return { reset: true };

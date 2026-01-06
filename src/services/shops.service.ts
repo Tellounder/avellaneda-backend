@@ -11,6 +11,7 @@ import {
 } from '@prisma/client';
 import { randomBytes, randomUUID, scryptSync } from 'crypto';
 import prisma from '../../prisma/client';
+import { getShopRatingsMap } from './ratings.service';
 import { computeAgendaSuspended, createQuotaWalletFromLegacy, creditLiveExtra, creditReelExtra } from './quota.service';
 
 type SocialHandleInput = { platform?: string; handle?: string };
@@ -149,7 +150,15 @@ export const getShops = async () => {
 
   const missingWallet = shops.filter((shop) => !shop.quotaWallet);
   if (missingWallet.length === 0) {
-    return shops;
+    const ratings = await getShopRatingsMap();
+    return shops.map((shop) => {
+      const rating = ratings.get(shop.id);
+      return {
+        ...shop,
+        ratingAverage: rating?.avg ?? 0,
+        ratingCount: rating?.count ?? 0,
+      };
+    });
   }
 
   for (const shop of missingWallet) {
@@ -164,9 +173,18 @@ export const getShops = async () => {
     );
   }
 
-  return prisma.shop.findMany({
+  const hydrated = await prisma.shop.findMany({
     orderBy: { name: 'asc' },
     include: shopInclude,
+  });
+  const ratings = await getShopRatingsMap();
+  return hydrated.map((shop) => {
+    const rating = ratings.get(shop.id);
+    return {
+      ...shop,
+      ratingAverage: rating?.avg ?? 0,
+      ratingCount: rating?.count ?? 0,
+    };
   });
 };
 
@@ -192,7 +210,7 @@ export const getShopById = async (id: string) => {
       },
       prisma
     );
-    return prisma.shop.findUnique({
+    const hydrated = await prisma.shop.findUnique({
       where: { id },
       include: {
         streams: true,
@@ -200,8 +218,22 @@ export const getShopById = async (id: string) => {
         ...shopInclude,
       },
     });
+    if (!hydrated) return hydrated;
+    const ratings = await getShopRatingsMap();
+    const rating = ratings.get(hydrated.id);
+    return {
+      ...hydrated,
+      ratingAverage: rating?.avg ?? 0,
+      ratingCount: rating?.count ?? 0,
+    };
   }
-  return shop;
+  const ratings = await getShopRatingsMap();
+  const rating = ratings.get(shop.id);
+  return {
+    ...shop,
+    ratingAverage: rating?.avg ?? 0,
+    ratingCount: rating?.count ?? 0,
+  };
 };
 
 export const createShop = async (data: any) => {
@@ -214,6 +246,20 @@ export const createShop = async (data: any) => {
   const normalizedEmail = normalizeEmail(data.email);
   let authEmail = normalizedEmail;
   let requiresEmailFix = false;
+
+  if (normalizedEmail) {
+    const existingShop = await prisma.shop.findFirst({
+      where: {
+        email: {
+          equals: normalizedEmail,
+          mode: 'insensitive',
+        },
+      },
+    });
+    if (existingShop) {
+      throw new Error('Ya existe una tienda con ese email.');
+    }
+  }
 
   if (!isValidEmail(normalizedEmail)) {
     authEmail = buildTechnicalEmail(shopId);
@@ -289,12 +335,28 @@ export const updateShop = async (id: string, data: any) => {
   const socialHandles = data.socialHandles !== undefined ? buildSocialHandles(data.socialHandles) : null;
   const whatsappLines = data.whatsappLines !== undefined ? buildWhatsappLines(data.whatsappLines) : null;
   const status = data.status !== undefined ? normalizeShopStatus(data.status) : undefined;
+  const normalizedEmail = data.email !== undefined ? normalizeEmail(data.email) : undefined;
+
+  if (normalizedEmail) {
+    const existingShop = await prisma.shop.findFirst({
+      where: {
+        id: { not: id },
+        email: {
+          equals: normalizedEmail,
+          mode: 'insensitive',
+        },
+      },
+    });
+    if (existingShop) {
+      throw new Error('Ya existe una tienda con ese email.');
+    }
+  }
 
   const updateData: any = {
     name: data.name,
     razonSocial: data.razonSocial,
     cuit: data.cuit,
-    email: data.email,
+    email: normalizedEmail,
     address: data.address,
     logoUrl: data.logoUrl,
     website: data.website,
@@ -340,7 +402,30 @@ export const updateShop = async (id: string, data: any) => {
   });
 };
 
-export const buyStreamQuota = async (id: string, amount: number) => {
+export const acceptShop = async (id: string, authUserId: string) => {
+  const shop = await prisma.shop.findUnique({ where: { id } });
+  if (!shop) {
+    throw new Error('Tienda no encontrada.');
+  }
+  if (shop.authUserId && shop.authUserId !== authUserId) {
+    throw new Error('Acceso denegado.');
+  }
+
+  return prisma.shop.update({
+    where: { id },
+    data: {
+      ownerAcceptedAt: shop.ownerAcceptedAt || new Date(),
+    },
+    include: {
+      socialHandles: true,
+      whatsappLines: true,
+      penalties: true,
+      quotaWallet: true,
+    },
+  });
+};
+
+export const buyStreamQuota = async (id: string, amount: number, actor?: { userType: AuthUserType; authUserId: string }) => {
   const numericAmount = Number(amount);
   if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
     throw new Error('Cantidad invalida.');
@@ -358,35 +443,42 @@ export const buyStreamQuota = async (id: string, amount: number) => {
   }
 
   return prisma.$transaction(async (tx) => {
+    const isAdmin = actor?.userType === AuthUserType.ADMIN;
     const purchase = await tx.purchaseRequest.create({
       data: {
         shopId: id,
         type: PurchaseType.LIVE_PACK,
         quantity: numericAmount,
-        status: PurchaseStatus.APPROVED,
-        approvedAt: new Date(),
+        status: isAdmin ? PurchaseStatus.APPROVED : PurchaseStatus.PENDING,
+        approvedAt: isAdmin ? new Date() : null,
+        approvedByAdminId: isAdmin ? actor?.authUserId : null,
       },
     });
 
-    await creditLiveExtra(id, numericAmount, tx, {
-      refType: QuotaRefType.PURCHASE,
-      refId: purchase.purchaseId,
-      actorType: QuotaActorType.SHOP,
-      actorId: id,
-    });
+    if (isAdmin) {
+      await creditLiveExtra(id, numericAmount, tx, {
+        refType: QuotaRefType.PURCHASE,
+        refId: purchase.purchaseId,
+        actorType: QuotaActorType.ADMIN,
+        actorId: actor?.authUserId,
+      });
+    }
 
-    return tx.shop.findUnique({
+    const shop = await tx.shop.findUnique({
       where: { id },
       include: {
         socialHandles: true,
         whatsappLines: true,
         penalties: true,
+        quotaWallet: true,
       },
     });
+
+    return { shop, purchase };
   });
 };
 
-export const buyReelQuota = async (id: string, amount: number) => {
+export const buyReelQuota = async (id: string, amount: number, actor?: { userType: AuthUserType; authUserId: string }) => {
   const numericAmount = Number(amount);
   if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
     throw new Error('Cantidad invalida.');
@@ -401,31 +493,38 @@ export const buyReelQuota = async (id: string, amount: number) => {
   }
 
   return prisma.$transaction(async (tx) => {
+    const isAdmin = actor?.userType === AuthUserType.ADMIN;
     const purchase = await tx.purchaseRequest.create({
       data: {
         shopId: id,
         type: PurchaseType.REEL_PACK,
         quantity: numericAmount,
-        status: PurchaseStatus.APPROVED,
-        approvedAt: new Date(),
+        status: isAdmin ? PurchaseStatus.APPROVED : PurchaseStatus.PENDING,
+        approvedAt: isAdmin ? new Date() : null,
+        approvedByAdminId: isAdmin ? actor?.authUserId : null,
       },
     });
 
-    await creditReelExtra(id, numericAmount, tx, {
-      refType: QuotaRefType.PURCHASE,
-      refId: purchase.purchaseId,
-      actorType: QuotaActorType.SHOP,
-      actorId: id,
-    });
+    if (isAdmin) {
+      await creditReelExtra(id, numericAmount, tx, {
+        refType: QuotaRefType.PURCHASE,
+        refId: purchase.purchaseId,
+        actorType: QuotaActorType.ADMIN,
+        actorId: actor?.authUserId,
+      });
+    }
 
-    return tx.shop.findUnique({
+    const shop = await tx.shop.findUnique({
       where: { id },
       include: {
         socialHandles: true,
         whatsappLines: true,
         penalties: true,
+        quotaWallet: true,
       },
     });
+
+    return { shop, purchase };
   });
 };
 

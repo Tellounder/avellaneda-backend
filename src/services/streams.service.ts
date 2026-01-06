@@ -11,6 +11,7 @@ import {
   StreamStatus,
 } from '@prisma/client';
 import prisma from '../../prisma/client';
+import { getShopRatingsMap } from './ratings.service';
 import { createQuotaTransaction, getLiveQuotaSnapshot, reserveLiveQuota } from './quota.service';
 
 const normalizePlatform = (value: unknown): SocialPlatform => {
@@ -113,7 +114,7 @@ const validateStreamSchedule = async (data: any, excludeId?: string, client = pr
 };
 
 export const getStreams = async () => {
-  return prisma.stream.findMany({
+  const streams = await prisma.stream.findMany({
     orderBy: { createdAt: 'desc' },
     include: {
       shop: {
@@ -125,10 +126,24 @@ export const getStreams = async () => {
       },
     },
   });
+
+  const ratings = await getShopRatingsMap();
+  return streams.map((stream) => {
+    if (!stream.shop) return stream;
+    const rating = ratings.get(stream.shop.id);
+    return {
+      ...stream,
+      shop: {
+        ...stream.shop,
+        ratingAverage: rating?.avg ?? 0,
+        ratingCount: rating?.count ?? 0,
+      },
+    };
+  });
 };
 
 export const getStreamById = async (id: string) => {
-  return prisma.stream.findUnique({
+  const stream = await prisma.stream.findUnique({
     where: { id },
     include: {
       shop: {
@@ -140,6 +155,19 @@ export const getStreamById = async (id: string) => {
       },
     },
   });
+  if (!stream || !stream.shop) {
+    return stream;
+  }
+  const ratings = await getShopRatingsMap();
+  const rating = ratings.get(stream.shop.id);
+  return {
+    ...stream,
+    shop: {
+      ...stream.shop,
+      ratingAverage: rating?.avg ?? 0,
+      ratingCount: rating?.count ?? 0,
+    },
+  };
 };
 
 export const createStream = async (data: any) => {

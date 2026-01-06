@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import * as NotificationsService from '../services/notifications.service';
+import { NotificationType } from '@prisma/client';
 
 const canAccessUser = (req: Request, userId: string) => {
   if (!req.auth) return false;
@@ -15,6 +16,26 @@ export const getNotificationsByUser = async (req: Request, res: Response) => {
     }
     const notifications = await NotificationsService.getNotificationsByUser(userId);
     res.json(notifications);
+  } catch (error) {
+    res.status(500).json({ error: 'Error fetching notifications' });
+  }
+};
+
+export const getAllNotifications = async (req: Request, res: Response) => {
+  try {
+    if (!req.auth || req.auth.userType !== 'ADMIN') {
+      return res.status(403).json({ error: 'Acceso denegado' });
+    }
+    const limit = Number(req.query?.limit || 50);
+    const unreadOnly = String(req.query?.unread || '').toLowerCase() === 'true';
+    const type = String(req.query?.type || '').toUpperCase();
+    const parsedType = ['SYSTEM', 'REMINDER', 'PURCHASE'].includes(type) ? (type as NotificationType) : undefined;
+    const data = await NotificationsService.getAllNotifications({
+      limit,
+      unreadOnly,
+      type: parsedType,
+    });
+    res.json(data);
   } catch (error) {
     res.status(500).json({ error: 'Error fetching notifications' });
   }
@@ -49,5 +70,15 @@ export const markAllAsRead = async (req: Request, res: Response) => {
     res.json(updated);
   } catch (error) {
     res.status(500).json({ error: 'Error marking all notifications as read' });
+  }
+};
+
+export const runReminderNotifications = async (req: Request, res: Response) => {
+  try {
+    const minutes = Number(req.body?.minutesAhead || 15);
+    const data = await NotificationsService.runReminderNotifications(minutes);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Error running reminder notifications' });
   }
 };

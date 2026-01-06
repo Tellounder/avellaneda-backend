@@ -1,75 +1,75 @@
 import prisma from '../../prisma/client';
 
 export const getUsers = async () => {
-  return prisma.user.findMany({
+  return prisma.authUser.findMany({
     include: {
-      favorites: true,
-      agenda: true,
+      favorites: { include: { shop: true } },
+      agenda: { include: { stream: true } },
     },
   });
 };
 
 export const getUserById = async (id: string) => {
-  return prisma.user.findUnique({
+  return prisma.authUser.findUnique({
     where: { id },
     include: {
-      favorites: true,
-      agenda: true,
+      favorites: { include: { shop: true } },
+      agenda: { include: { stream: true } },
     },
   });
 };
 
 export const createUser = async (data: any) => {
-  return prisma.user.create({ data });
+  return prisma.authUser.create({
+    data: {
+      email: String(data?.email || '').trim().toLowerCase(),
+      userType: data?.userType || 'CLIENT',
+      status: data?.status || 'ACTIVE',
+    },
+  });
 };
 
 export const updateUser = async (id: string, data: any) => {
-  return prisma.user.update({
+  return prisma.authUser.update({
     where: { id },
     data,
   });
 };
 
 export const addFavoriteShop = async (userId: string, shopId: string) => {
-  return prisma.user.update({
+  const existing = await prisma.favorite.findFirst({ where: { userId, shopId } });
+  if (!existing) {
+    await prisma.favorite.create({ data: { userId, shopId } });
+  }
+  return prisma.authUser.findUnique({
     where: { id: userId },
-    data: {
-      favorites: {
-        connect: { id: shopId },
-      },
-    },
+    include: { favorites: { include: { shop: true } } },
   });
 };
 
 export const removeFavoriteShop = async (userId: string, shopId: string) => {
-  return prisma.user.update({
+  await prisma.favorite.deleteMany({ where: { userId, shopId } });
+  return prisma.authUser.findUnique({
     where: { id: userId },
-    data: {
-      favorites: {
-        disconnect: { id: shopId },
-      },
-    },
+    include: { favorites: { include: { shop: true } } },
   });
 };
 
 export const addToAgenda = async (userId: string, streamId: string) => {
-  return prisma.user.update({
+  const existing = await prisma.agenda.findFirst({ where: { userId, streamId } });
+  if (!existing) {
+    await prisma.agenda.create({ data: { userId, streamId } });
+  }
+  return prisma.authUser.findUnique({
     where: { id: userId },
-    data: {
-      agenda: {
-        connect: { id: streamId },
-      },
-    },
+    include: { agenda: { include: { stream: true } } },
   });
 };
 
 export const removeFromAgenda = async (userId: string, streamId: string) => {
-  return prisma.user.update({
+  await prisma.agenda.deleteMany({ where: { userId, streamId } });
+  return prisma.authUser.findUnique({
     where: { id: userId },
-    data: {
-      agenda: {
-        disconnect: { id: streamId },
-      },
-    },
+    include: { agenda: { include: { stream: true } } },
   });
 };

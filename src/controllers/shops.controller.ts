@@ -75,8 +75,8 @@ export const updateShop = async (req: Request, res: Response) => {
 
 export const buyStreamQuota = async (req: Request, res: Response) => {
   try {
-    const data = await ShopsService.buyStreamQuota(req.params.id, req.body.amount);
-    res.json(sanitizeShopPayload(data, req));
+    const data = await ShopsService.buyStreamQuota(req.params.id, req.body.amount, req.auth || undefined);
+    res.json({ shop: sanitizeShopPayload(data.shop, req), purchase: data.purchase });
   } catch (error: any) {
     res.status(400).json({ message: error.message || 'Error al comprar cupo de stream', error });
   }
@@ -84,8 +84,8 @@ export const buyStreamQuota = async (req: Request, res: Response) => {
 
 export const buyReelQuota = async (req: Request, res: Response) => {
   try {
-    const data = await ShopsService.buyReelQuota(req.params.id, req.body.amount);
-    res.json(sanitizeShopPayload(data, req));
+    const data = await ShopsService.buyReelQuota(req.params.id, req.body.amount, req.auth || undefined);
+    res.json({ shop: sanitizeShopPayload(data.shop, req), purchase: data.purchase });
   } catch (error: any) {
     res.status(400).json({ message: error.message || 'Error al comprar cupo de reel', error });
   }
@@ -143,6 +143,15 @@ export const resetShopPassword = async (req: Request, res: Response) => {
     res.json(data);
   } catch (error) {
     res.status(500).json({ message: 'Error al resetear clave', error });
+  }
+};
+
+export const acceptShop = async (req: Request, res: Response) => {
+  try {
+    const data = await ShopsService.acceptShop(req.params.id, req.auth?.authUserId || '');
+    res.json(sanitizeShopPayload(data, req));
+  } catch (error: any) {
+    res.status(400).json({ message: error.message || 'Error al aceptar tienda', error });
   }
 };
 

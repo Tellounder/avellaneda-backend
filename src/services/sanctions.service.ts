@@ -48,14 +48,13 @@ const getSuspensionDays = (plan: string | null | undefined) => {
   return 7;
 };
 
-const FINAL_STATUSES: StreamStatus[] = [
+const SANCTION_BLOCKED_STATUSES: StreamStatus[] = [
   StreamStatus.MISSED,
   StreamStatus.BANNED,
   StreamStatus.CANCELLED,
-  StreamStatus.FINISHED,
 ];
 
-const isFinalStatus = (status: StreamStatus) => FINAL_STATUSES.includes(status);
+const isSanctionBlocked = (status: StreamStatus) => SANCTION_BLOCKED_STATUSES.includes(status);
 
 const createAuditLog = async (
   data: {
@@ -250,12 +249,12 @@ const processSanctionForLive = async (streamId: string) => {
   if (!stream || !stream.shop) {
     return { skipped: true };
   }
-  if (isFinalStatus(stream.status)) {
+  if (isSanctionBlocked(stream.status)) {
     return { skipped: true };
   }
 
-  const startTime = stream.startTime || stream.scheduledAt;
-  const validFrom = addMinutes(startTime, REPORT_GRACE_MINUTES);
+  const referenceTime = stream.endTime || stream.startTime || stream.scheduledAt;
+  const validFrom = addMinutes(referenceTime, REPORT_GRACE_MINUTES);
   const validatedReports = await countValidatedReports(stream.id, validFrom, client);
   if (validatedReports < REPORT_THRESHOLD) {
     return { skipped: true };
@@ -433,7 +432,7 @@ const processPendingReprogramTimeouts = async () => {
 
 export const runSanctionsEngine = async () => {
   const candidates = await prisma.stream.findMany({
-    where: { status: StreamStatus.LIVE },
+    where: { status: StreamStatus.FINISHED },
     select: { id: true, startTime: true, scheduledAt: true },
   });
 

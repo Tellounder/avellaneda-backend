@@ -1,11 +1,51 @@
+import { NotificationType, StreamStatus } from '@prisma/client';
 import prisma from '../../prisma/client';
 
-export const createNotification = async (userId: string, message: string) => {
+const addMinutes = (date: Date, minutes: number) =>
+  new Date(date.getTime() + minutes * 60 * 1000);
+
+export const getAllNotifications = async (options?: {
+  limit?: number;
+  unreadOnly?: boolean;
+  type?: NotificationType;
+}) => {
+  const limit = Math.min(Math.max(Number(options?.limit || 50), 1), 200);
+  const where: Record<string, any> = {};
+  if (options?.unreadOnly) {
+    where.read = false;
+  }
+  if (options?.type) {
+    where.type = options.type;
+  }
+  return prisma.notification.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+    include: {
+      user: {
+        select: {
+          id: true,
+          email: true,
+          userType: true,
+        },
+      },
+    },
+  });
+};
+
+export const createNotification = async (
+  userId: string,
+  message: string,
+  options?: { type?: NotificationType; refId?: string | null; notifyAt?: Date | null }
+) => {
   return prisma.notification.create({
     data: {
       userId,
       message,
       read: false,
+      type: options?.type ?? NotificationType.SYSTEM,
+      refId: options?.refId ?? null,
+      notifyAt: options?.notifyAt ?? null,
     },
   });
 };
@@ -35,4 +75,62 @@ export const markAllAsRead = async (userId: string) => {
     where: { userId, read: false },
     data: { read: true },
   });
+};
+
+export const runReminderNotifications = async (minutesAhead: number = 15) => {
+  const now = new Date();
+  const cutoff = addMinutes(now, minutesAhead);
+  const agenda = await prisma.agenda.findMany({
+    where: {
+      stream: {
+        status: StreamStatus.UPCOMING,
+        scheduledAt: { gt: now, lte: cutoff },
+      },
+    },
+    include: {
+      stream: true,
+    },
+  });
+
+  let created = 0;
+  let skipped = 0;
+
+  for (const item of agenda) {
+    const stream = item.stream;
+    if (!stream) {
+      skipped += 1;
+      continue;
+    }
+
+    const existing = await prisma.notification.findFirst({
+      where: {
+        userId: item.userId,
+        type: NotificationType.REMINDER,
+        refId: stream.id,
+      },
+    });
+    if (existing) {
+      skipped += 1;
+      continue;
+    }
+
+    const timeLabel = new Date(stream.scheduledAt).toLocaleTimeString('es-AR', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const dateLabel = new Date(stream.scheduledAt).toLocaleDateString('es-AR', {
+      day: '2-digit',
+      month: 'short',
+    });
+    const message = `Recordatorio: ${stream.title} hoy ${dateLabel} ${timeLabel} hs.`;
+
+    await createNotification(item.userId, message, {
+      type: NotificationType.REMINDER,
+      refId: stream.id,
+      notifyAt: addMinutes(stream.scheduledAt, -minutesAhead),
+    });
+    created += 1;
+  }
+
+  return { created, skipped, windowMinutes: minutesAhead };
 };

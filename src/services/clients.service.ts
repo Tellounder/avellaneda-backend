@@ -1,17 +1,6 @@
+import { NotificationType, StreamStatus } from '@prisma/client';
 import prisma from '../../prisma/client';
-
-const ensureLegacyUser = async (email: string, name?: string) => {
-  let user = await prisma.user.findUnique({ where: { email } });
-  if (!user) {
-    user = await prisma.user.create({
-      data: {
-        email,
-        name: name || 'Cliente',
-      },
-    });
-  }
-  return user;
-};
+import { createNotification } from './notifications.service';
 
 const listFavorites = async (userId: string) => {
   const favorites = await prisma.favorite.findMany({
@@ -29,6 +18,14 @@ const listReminders = async (userId: string) => {
   return reminders.map((item) => item.streamId);
 };
 
+const listReelViews = async (userId: string) => {
+  const views = await prisma.reelView.findMany({
+    where: { userId },
+    select: { reelId: true },
+  });
+  return views.map((item) => item.reelId);
+};
+
 export const createClient = async (authUserId: string, data: { displayName?: string; avatarUrl?: string }) => {
   return prisma.client.upsert({
     where: { authUserId },
@@ -44,49 +41,66 @@ export const createClient = async (authUserId: string, data: { displayName?: str
   });
 };
 
-export const getClientState = async (email: string, name?: string) => {
-  const user = await ensureLegacyUser(email, name);
-  const [favorites, reminders] = await Promise.all([
-    listFavorites(user.id),
-    listReminders(user.id),
+export const getClientState = async (authUserId: string) => {
+  const [favorites, reminders, viewedReels] = await Promise.all([
+    listFavorites(authUserId),
+    listReminders(authUserId),
+    listReelViews(authUserId),
   ]);
-  return { favorites, reminders };
+  return { favorites, reminders, viewedReels };
 };
 
-export const addFavorite = async (email: string, name: string | undefined, shopId: string) => {
-  const user = await ensureLegacyUser(email, name);
+export const addFavorite = async (authUserId: string, shopId: string) => {
   const existing = await prisma.favorite.findFirst({
-    where: { userId: user.id, shopId },
+    where: { userId: authUserId, shopId },
   });
   if (!existing) {
-    await prisma.favorite.create({ data: { userId: user.id, shopId } });
+    await prisma.favorite.create({ data: { userId: authUserId, shopId } });
   }
-  return listFavorites(user.id);
+  return listFavorites(authUserId);
 };
 
-export const removeFavorite = async (email: string, name: string | undefined, shopId: string) => {
-  const user = await ensureLegacyUser(email, name);
+export const removeFavorite = async (authUserId: string, shopId: string) => {
   await prisma.favorite.deleteMany({
-    where: { userId: user.id, shopId },
+    where: { userId: authUserId, shopId },
   });
-  return listFavorites(user.id);
+  return listFavorites(authUserId);
 };
 
-export const addReminder = async (email: string, name: string | undefined, streamId: string) => {
-  const user = await ensureLegacyUser(email, name);
+export const addReminder = async (authUserId: string, streamId: string) => {
+  const stream = await prisma.stream.findUnique({
+    where: { id: streamId },
+    select: { id: true, title: true, scheduledAt: true, status: true },
+  });
+  if (!stream) {
+    throw new Error('Vivo no encontrado.');
+  }
+  if (stream.status !== StreamStatus.UPCOMING) {
+    throw new Error('Solo puedes agendar recordatorios de vivos programados.');
+  }
   const existing = await prisma.agenda.findFirst({
-    where: { userId: user.id, streamId },
+    where: { userId: authUserId, streamId },
   });
   if (!existing) {
-    await prisma.agenda.create({ data: { userId: user.id, streamId } });
+    await prisma.agenda.create({ data: { userId: authUserId, streamId } });
+    const dateLabel = stream.scheduledAt
+      ? new Date(stream.scheduledAt).toLocaleString('es-AR', { dateStyle: 'medium', timeStyle: 'short' })
+      : 'fecha pendiente';
+    await createNotification(authUserId, `Recordatorio activo: ${stream.title} (${dateLabel}).`);
   }
-  return listReminders(user.id);
+  return listReminders(authUserId);
 };
 
-export const removeReminder = async (email: string, name: string | undefined, streamId: string) => {
-  const user = await ensureLegacyUser(email, name);
+export const removeReminder = async (authUserId: string, streamId: string) => {
   await prisma.agenda.deleteMany({
-    where: { userId: user.id, streamId },
+    where: { userId: authUserId, streamId },
   });
-  return listReminders(user.id);
+  await prisma.notification.deleteMany({
+    where: {
+      userId: authUserId,
+      type: NotificationType.REMINDER,
+      refId: streamId,
+    },
+  });
+  return listReminders(authUserId);
 };

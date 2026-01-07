@@ -30,3 +30,12 @@ export const resolveReport = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Error al resolver reporte', error });
   }
 };
+
+export const rejectReport = async (req: Request, res: Response) => {
+  try {
+    const data = await ReportsService.rejectReport(req.params.id);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ message: 'Error al rechazar reporte', error });
+  }
+};

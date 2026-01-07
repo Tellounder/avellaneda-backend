@@ -11,6 +11,16 @@ export const getPurchases = async (req: Request, res: Response) => {
   }
 };
 
+export const getPurchasesByShop = async (req: Request, res: Response) => {
+  try {
+    const status = req.query.status as any;
+    const data = await PurchasesService.getPurchasesByShop(req.params.shopId, status);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ message: 'Error al obtener compras de la tienda', error });
+  }
+};
+
 export const approvePurchase = async (req: Request, res: Response) => {
   try {
     const data = await PurchasesService.approvePurchase(req.params.id, req.auth?.authUserId || '');

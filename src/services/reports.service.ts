@@ -28,3 +28,10 @@ export const resolveReport = async (id: string) => {
     data: { resolved: true, status: ReportStatus.VALIDATED },
   });
 };
+
+export const rejectReport = async (id: string) => {
+  return prisma.report.update({
+    where: { id },
+    data: { resolved: true, status: ReportStatus.REJECTED },
+  });
+};

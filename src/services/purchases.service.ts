@@ -13,6 +13,19 @@ export const getPurchases = async (status?: PurchaseStatus) => {
   });
 };
 
+export const getPurchasesByShop = async (shopId: string, status?: PurchaseStatus) => {
+  return prisma.purchaseRequest.findMany({
+    where: {
+      shopId,
+      ...(status ? { status } : {}),
+    },
+    orderBy: { createdAt: 'desc' },
+    include: {
+      approvedByAdmin: true,
+    },
+  });
+};
+
 export const approvePurchase = async (purchaseId: string, adminId: string) => {
   return prisma.$transaction(async (tx) => {
     const purchase = await tx.purchaseRequest.findUnique({ where: { purchaseId } });

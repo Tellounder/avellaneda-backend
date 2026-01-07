@@ -17,7 +17,11 @@ export const getReports = async () => {
   return prisma.report.findMany({
     orderBy: { createdAt: 'desc' },
     include: {
-      stream: true,
+      stream: {
+        include: {
+          shop: true,
+        },
+      },
     },
   });
 };

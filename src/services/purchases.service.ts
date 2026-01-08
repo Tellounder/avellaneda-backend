@@ -1,6 +1,7 @@
-import { PurchaseStatus, PurchaseType, QuotaActorType, QuotaRefType } from '@prisma/client';
+import { NotificationType, PurchaseStatus, PurchaseType, QuotaActorType, QuotaRefType } from '@prisma/client';
 import prisma from '../../prisma/client';
 import { creditLiveExtra, creditReelExtra } from './quota.service';
+import { createNotification } from './notifications.service';
 
 export const getPurchases = async (status?: PurchaseStatus) => {
   return prisma.purchaseRequest.findMany({
@@ -27,7 +28,7 @@ export const getPurchasesByShop = async (shopId: string, status?: PurchaseStatus
 };
 
 export const approvePurchase = async (purchaseId: string, adminId: string) => {
-  return prisma.$transaction(async (tx) => {
+  const updated = await prisma.$transaction(async (tx) => {
     const purchase = await tx.purchaseRequest.findUnique({ where: { purchaseId } });
     if (!purchase) {
       throw new Error('Solicitud no encontrada.');
@@ -62,10 +63,19 @@ export const approvePurchase = async (purchaseId: string, adminId: string) => {
       include: { shop: true },
     });
   });
+
+  if (updated.shop?.authUserId) {
+    await createNotification(updated.shop.authUserId, `Tu compra fue aprobada (${updated.quantity} cupos).`, {
+      type: NotificationType.PURCHASE,
+      refId: updated.purchaseId,
+    });
+  }
+
+  return updated;
 };
 
 export const rejectPurchase = async (purchaseId: string, adminId: string, notes?: string) => {
-  return prisma.purchaseRequest.update({
+  const updated = await prisma.purchaseRequest.update({
     where: { purchaseId },
     data: {
       status: PurchaseStatus.REJECTED,
@@ -75,4 +85,13 @@ export const rejectPurchase = async (purchaseId: string, adminId: string, notes?
     },
     include: { shop: true },
   });
+
+  if (updated.shop?.authUserId) {
+    await createNotification(updated.shop.authUserId, 'Tu compra fue rechazada. Revisá el detalle en el panel.', {
+      type: NotificationType.PURCHASE,
+      refId: updated.purchaseId,
+    });
+  }
+
+  return updated;
 };

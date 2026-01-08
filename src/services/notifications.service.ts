@@ -1,4 +1,4 @@
-import { NotificationType, StreamStatus } from '@prisma/client';
+import { AuthUserStatus, AuthUserType, NotificationType, StreamStatus } from '@prisma/client';
 import prisma from '../../prisma/client';
 
 const addMinutes = (date: Date, minutes: number) =>
@@ -48,6 +48,30 @@ export const createNotification = async (
       notifyAt: options?.notifyAt ?? null,
     },
   });
+};
+
+export const notifyAdmins = async (
+  message: string,
+  options?: { type?: NotificationType; refId?: string | null; notifyAt?: Date | null }
+) => {
+  const admins = await prisma.authUser.findMany({
+    where: { userType: AuthUserType.ADMIN, status: AuthUserStatus.ACTIVE },
+    select: { id: true },
+  });
+  if (!admins.length) {
+    return { created: 0 };
+  }
+  await prisma.notification.createMany({
+    data: admins.map((admin) => ({
+      userId: admin.id,
+      message,
+      read: false,
+      type: options?.type ?? NotificationType.SYSTEM,
+      refId: options?.refId ?? null,
+      notifyAt: options?.notifyAt ?? null,
+    })),
+  });
+  return { created: admins.length };
 };
 
 export const getNotificationsByUser = async (userId: string) => {

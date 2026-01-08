@@ -1,6 +1,7 @@
 import {
   AuthUserStatus,
   AuthUserType,
+  NotificationType,
   PurchaseStatus,
   PurchaseType,
   QuotaActorType,
@@ -13,6 +14,7 @@ import { randomBytes, randomUUID, scryptSync } from 'crypto';
 import prisma from '../../prisma/client';
 import { getShopRatingsMap } from './ratings.service';
 import { computeAgendaSuspended, createQuotaWalletFromLegacy, creditLiveExtra, creditReelExtra } from './quota.service';
+import { notifyAdmins } from './notifications.service';
 
 type SocialHandleInput = { platform?: string; handle?: string };
 type WhatsappLineInput = { label?: string; number?: string };
@@ -411,7 +413,7 @@ export const acceptShop = async (id: string, authUserId: string) => {
     throw new Error('Acceso denegado.');
   }
 
-  return prisma.shop.update({
+  const updated = await prisma.shop.update({
     where: { id },
     data: {
       ownerAcceptedAt: shop.ownerAcceptedAt || new Date(),
@@ -423,6 +425,13 @@ export const acceptShop = async (id: string, authUserId: string) => {
       quotaWallet: true,
     },
   });
+
+  await notifyAdmins(`La tienda ${updated.name} confirmo sus datos.`, {
+    type: NotificationType.SYSTEM,
+    refId: updated.id,
+  });
+
+  return updated;
 };
 
 export const buyStreamQuota = async (id: string, amount: number, actor?: { userType: AuthUserType; authUserId: string }) => {
@@ -430,6 +439,7 @@ export const buyStreamQuota = async (id: string, amount: number, actor?: { userT
   if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
     throw new Error('Cantidad invalida.');
   }
+  const isAdmin = actor?.userType === AuthUserType.ADMIN;
 
   const shop = await prisma.shop.findUnique({
     where: { id },
@@ -442,8 +452,7 @@ export const buyStreamQuota = async (id: string, amount: number, actor?: { userT
     throw new Error('Agenda suspendida: no puedes comprar cupos de vivos.');
   }
 
-  return prisma.$transaction(async (tx) => {
-    const isAdmin = actor?.userType === AuthUserType.ADMIN;
+  const result = await prisma.$transaction(async (tx) => {
     const purchase = await tx.purchaseRequest.create({
       data: {
         shopId: id,
@@ -476,6 +485,15 @@ export const buyStreamQuota = async (id: string, amount: number, actor?: { userT
 
     return { shop, purchase };
   });
+
+  if (!isAdmin) {
+    await notifyAdmins(`Nueva solicitud de compra de vivos: ${result.shop?.name || 'Tienda'} (${numericAmount}).`, {
+      type: NotificationType.PURCHASE,
+      refId: result.purchase.purchaseId,
+    });
+  }
+
+  return result;
 };
 
 export const buyReelQuota = async (id: string, amount: number, actor?: { userType: AuthUserType; authUserId: string }) => {
@@ -483,6 +501,7 @@ export const buyReelQuota = async (id: string, amount: number, actor?: { userTyp
   if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
     throw new Error('Cantidad invalida.');
   }
+  const isAdmin = actor?.userType === AuthUserType.ADMIN;
 
   const shop = await prisma.shop.findUnique({
     where: { id },
@@ -492,8 +511,7 @@ export const buyReelQuota = async (id: string, amount: number, actor?: { userTyp
     throw new Error('Tienda no encontrada.');
   }
 
-  return prisma.$transaction(async (tx) => {
-    const isAdmin = actor?.userType === AuthUserType.ADMIN;
+  const result = await prisma.$transaction(async (tx) => {
     const purchase = await tx.purchaseRequest.create({
       data: {
         shopId: id,
@@ -526,6 +544,15 @@ export const buyReelQuota = async (id: string, amount: number, actor?: { userTyp
 
     return { shop, purchase };
   });
+
+  if (!isAdmin) {
+    await notifyAdmins(`Nueva solicitud de compra de historias: ${result.shop?.name || 'Tienda'} (${numericAmount}).`, {
+      type: NotificationType.PURCHASE,
+      refId: result.purchase.purchaseId,
+    });
+  }
+
+  return result;
 };
 
 export const assignOwner = async (shopId: string, payload: { authUserId?: string; email?: string }) => {

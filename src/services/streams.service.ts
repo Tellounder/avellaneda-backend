@@ -5,6 +5,7 @@ import {
   QuotaReason,
   QuotaRefType,
   QuotaResource,
+  NotificationType,
   ReportStatus,
   ShopStatus,
   SocialPlatform,
@@ -13,6 +14,7 @@ import {
 import prisma from '../../prisma/client';
 import { getShopRatingsMap } from './ratings.service';
 import { createQuotaTransaction, getLiveQuotaSnapshot, reserveLiveQuota } from './quota.service';
+import { notifyAdmins } from './notifications.service';
 
 const normalizePlatform = (value: unknown): SocialPlatform => {
   if (value === 'Instagram' || value === 'TikTok' || value === 'Facebook' || value === 'YouTube') {
@@ -334,6 +336,11 @@ export const reportStream = async (streamId: string, userId: string, payload?: {
   await prisma.stream.update({
     where: { id: streamId },
     data: { reportCount: { increment: 1 } },
+  });
+
+  await notifyAdmins(`Nuevo reporte: ${stream.title} (${stream.shop?.name || 'Sin tienda'}).`, {
+    type: NotificationType.SYSTEM,
+    refId: report.id,
   });
 
   return report;

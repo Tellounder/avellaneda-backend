@@ -4,6 +4,7 @@ import { requireAdmin, requireAuth, requireShopOrAdmin } from '../middleware/aut
 
 const router = Router();
 
+router.post('/run-lifecycle', requireAdmin, StreamsController.runStreamLifecycle);
 router.get('/', StreamsController.getStreams);
 router.get('/:id', StreamsController.getStreamById);
 router.post('/', requireShopOrAdmin((req) => req.body?.shopId || req.body?.shop?.id), StreamsController.createStream);
@@ -14,6 +15,7 @@ router.post('/:id/continue', requireAuth, StreamsController.continueLive);
 router.post('/:id/finish', requireAuth, StreamsController.finishStream);
 router.post('/:id/report', requireAuth, StreamsController.reportStream);
 router.post('/:id/rate', requireAuth, StreamsController.rateStream);
+router.post('/:id/like', requireAuth, StreamsController.toggleLikeStream);
 router.post('/:id/hide', requireAdmin, StreamsController.hideStream);
 router.post('/:id/show', requireAdmin, StreamsController.showStream);
 router.post('/:id/cancel', requireAuth, StreamsController.cancelStream);

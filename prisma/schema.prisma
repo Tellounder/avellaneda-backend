@@ -150,6 +150,7 @@ model AuthUser {
   agenda       Agenda[]
   notifications Notification[]
   reelViews    ReelView[]
+  streamLikes  StreamLike[]
 }
 
 model Admin {
@@ -251,6 +252,7 @@ model Stream {
   platform    SocialPlatform @default(Instagram)
   url         String?
   extensionCount Int   @default(0)
+  likes       Int      @default(0)
   reportCount Int      @default(0)
   editCount   Int      @default(0)
   lastEditedAt DateTime?
@@ -262,8 +264,20 @@ model Stream {
   reports     Report[]
   reviews     Review[]
   agenda      Agenda[]
+  streamLikes StreamLike[]
   scheduleEvents LiveScheduleEvent[]
   createdAt   DateTime  @default(now())
+}
+
+model StreamLike {
+  id       String   @id @default(uuid())
+  streamId String
+  stream   Stream   @relation(fields: [streamId], references: [id])
+  userId   String
+  user     AuthUser @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([streamId, userId])
 }
 
 model Reel {

@@ -172,6 +172,18 @@ export const rateStream = async (req: Request, res: Response) => {
   }
 };
 
+export const toggleLikeStream = async (req: Request, res: Response) => {
+  try {
+    if (!req.auth || req.auth.userType !== 'CLIENT') {
+      return res.status(403).json({ message: 'Debes iniciar sesion como cliente.' });
+    }
+    const data = await StreamsService.toggleLikeStream(req.params.id, req.auth.authUserId);
+    res.json(data);
+  } catch (error: any) {
+    res.status(400).json({ message: error.message || 'Error al marcar me gusta', error });
+  }
+};
+
 export const hideStream = async (req: Request, res: Response) => {
   try {
     const data = await StreamsService.hideStream(req.params.id);
@@ -207,5 +219,14 @@ export const banStream = async (req: Request, res: Response) => {
     res.json(sanitizeStreamPayload(data, req));
   } catch (error: any) {
     res.status(400).json({ message: error.message || 'Error al bloquear vivo', error });
+  }
+};
+
+export const runStreamLifecycle = async (_req: Request, res: Response) => {
+  try {
+    const data = await StreamsService.runStreamLifecycle();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ message: 'Error al ejecutar ciclo de vivos', error });
   }
 };

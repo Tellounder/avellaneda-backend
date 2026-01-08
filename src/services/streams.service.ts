@@ -372,6 +372,48 @@ export const rateStream = async (streamId: string, data: any, userId?: string) =
   });
 };
 
+export const toggleLikeStream = async (streamId: string, userId: string) => {
+  const stream = await prisma.stream.findUnique({
+    where: { id: streamId },
+    select: { id: true, status: true, hidden: true, likes: true },
+  });
+  if (!stream) {
+    throw new Error('Vivo no encontrado.');
+  }
+  if (stream.status === StreamStatus.BANNED) {
+    throw new Error('No puedes interactuar con un vivo bloqueado.');
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const current = await tx.stream.findUnique({
+      where: { id: streamId },
+      select: { likes: true },
+    });
+    const currentLikes = current?.likes ?? 0;
+    const existing = await tx.streamLike.findUnique({
+      where: { streamId_userId: { streamId, userId } },
+    });
+    if (existing) {
+      await tx.streamLike.delete({ where: { id: existing.id } });
+      const nextLikes = Math.max(0, currentLikes - 1);
+      const updated = await tx.stream.update({
+        where: { id: streamId },
+        data: { likes: nextLikes },
+        select: { likes: true },
+      });
+      return { liked: false, likes: updated.likes };
+    }
+
+    await tx.streamLike.create({ data: { streamId, userId } });
+    const updated = await tx.stream.update({
+      where: { id: streamId },
+      data: { likes: { increment: 1 } },
+      select: { likes: true },
+    });
+    return { liked: true, likes: updated.likes };
+  });
+};
+
 export const goLive = async (id: string) => {
   return prisma.stream.update({
     where: { id },
@@ -400,6 +442,42 @@ export const finishStream = async (id: string) => {
       endTime: new Date(),
     },
   });
+};
+
+export const runStreamLifecycle = async () => {
+  const now = new Date();
+  const started = await prisma.stream.updateMany({
+    where: {
+      status: StreamStatus.UPCOMING,
+      scheduledAt: { lte: now },
+    },
+    data: {
+      status: StreamStatus.LIVE,
+      startTime: now,
+    },
+  });
+
+  const liveStreams = await prisma.stream.findMany({
+    where: { status: StreamStatus.LIVE },
+    select: { id: true, scheduledAt: true, startTime: true, extensionCount: true },
+  });
+
+  const toFinish = liveStreams.filter((stream) => {
+    const baseStart = stream.startTime || stream.scheduledAt;
+    const extension = Math.max(0, stream.extensionCount || 0);
+    const durationMinutes = 30 + extension * 30;
+    const endTime = new Date(baseStart.getTime() + durationMinutes * 60 * 1000);
+    return endTime.getTime() <= now.getTime();
+  });
+
+  if (toFinish.length > 0) {
+    await prisma.stream.updateMany({
+      where: { id: { in: toFinish.map((stream) => stream.id) } },
+      data: { status: StreamStatus.FINISHED, endTime: now },
+    });
+  }
+
+  return { started: started.count, finished: toFinish.length };
 };
 
 export const cancelStream = async (id: string, reason?: string) => {

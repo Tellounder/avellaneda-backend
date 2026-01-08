@@ -26,6 +26,14 @@ const listReelViews = async (userId: string) => {
   return views.map((item) => item.reelId);
 };
 
+const listStreamLikes = async (userId: string) => {
+  const likes = await prisma.streamLike.findMany({
+    where: { userId },
+    select: { streamId: true },
+  });
+  return likes.map((item) => item.streamId);
+};
+
 export const createClient = async (authUserId: string, data: { displayName?: string; avatarUrl?: string }) => {
   return prisma.client.upsert({
     where: { authUserId },
@@ -42,12 +50,13 @@ export const createClient = async (authUserId: string, data: { displayName?: str
 };
 
 export const getClientState = async (authUserId: string) => {
-  const [favorites, reminders, viewedReels] = await Promise.all([
+  const [favorites, reminders, viewedReels, likes] = await Promise.all([
     listFavorites(authUserId),
     listReminders(authUserId),
     listReelViews(authUserId),
+    listStreamLikes(authUserId),
   ]);
-  return { favorites, reminders, viewedReels };
+  return { favorites, reminders, viewedReels, likes };
 };
 
 export const addFavorite = async (authUserId: string, shopId: string) => {

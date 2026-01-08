@@ -15,6 +15,7 @@ import prisma from '../../prisma/client';
 import { getShopRatingsMap } from './ratings.service';
 import { computeAgendaSuspended, createQuotaWalletFromLegacy, creditLiveExtra, creditReelExtra } from './quota.service';
 import { notifyAdmins } from './notifications.service';
+import { firebaseAuth } from '../lib/firebaseAdmin';
 
 type SocialHandleInput = { platform?: string; handle?: string };
 type WhatsappLineInput = { label?: string; number?: string };
@@ -745,18 +746,28 @@ export const rejectShop = async (id: string, reason?: string) => {
 };
 
 export const resetShopPassword = async (id: string) => {
-  const newPassword = randomBytes(4).toString('hex');
-  const passwordHash = hashPassword(newPassword);
-  const updatedShop = await prisma.shop.update({
-    where: { id },
-    data: { password: newPassword },
-    select: { authUserId: true },
-  });
-  if (updatedShop.authUserId && passwordHash) {
-    await prisma.authUser.update({
-      where: { id: updatedShop.authUserId },
-      data: { passwordHash },
-    });
+  if (!firebaseAuth) {
+    throw new Error('Firebase Admin no configurado.');
   }
-  return { password: newPassword };
+  const shop = await prisma.shop.findUnique({
+    where: { id },
+    select: { email: true },
+  });
+  if (!shop?.email) {
+    throw new Error('La tienda no tiene email configurado.');
+  }
+  const email = normalizeEmail(shop.email);
+  try {
+    await firebaseAuth.getUserByEmail(email);
+  } catch (error: any) {
+    if (error?.code === 'auth/user-not-found') {
+      const tempPassword = randomBytes(10).toString('hex');
+      await firebaseAuth.createUser({ email, password: tempPassword });
+    } else {
+      throw error;
+    }
+  }
+
+  const resetLink = await firebaseAuth.generatePasswordResetLink(email);
+  return { resetLink };
 };

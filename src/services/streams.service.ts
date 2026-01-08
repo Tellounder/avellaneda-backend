@@ -310,8 +310,8 @@ export const reportStream = async (streamId: string, userId: string, payload?: {
   if (!stream) {
     throw new Error('Vivo no encontrado.');
   }
-  if (stream.status !== StreamStatus.FINISHED) {
-    throw new Error('Solo puedes reportar vivos finalizados.');
+  if (stream.status !== StreamStatus.LIVE) {
+    throw new Error('Solo puedes reportar vivos en vivo.');
   }
 
   const existingReport = await prisma.report.findFirst({

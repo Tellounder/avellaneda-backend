@@ -36,6 +36,12 @@ const sanitizeStreamPayload = (payload: any, req: Request) => {
   return sanitizeOne(payload);
 };
 
+const formatICSDate = (date: Date) =>
+  date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+
+const escapeICSValue = (value: string) =>
+  value.replace(/\\/g, '\\\\').replace(/,/g, '\\,').replace(/;/g, '\\;').replace(/\n/g, '\\n');
+
 const ensureStreamAccess = async (req: Request, streamId: string) => {
   if (!req.auth) {
     throw { status: 401, message: 'Autenticacion requerida.' };
@@ -50,6 +56,55 @@ const ensureStreamAccess = async (req: Request, streamId: string) => {
   }
   if (stream.shopId !== req.auth.shopId) {
     throw { status: 403, message: 'Acceso denegado.' };
+  }
+};
+
+export const getStreamCalendar = async (req: Request, res: Response) => {
+  try {
+    const stream = await StreamsService.getStreamById(req.params.id);
+    if (!stream) {
+      return res.status(404).send('Vivo no encontrado.');
+    }
+    if ((stream as any).hidden) {
+      return res.status(404).send('Vivo no disponible.');
+    }
+    const start = new Date((stream as any).scheduledAt || Date.now());
+    const end =
+      (stream as any).scheduledEndPlanned
+        ? new Date((stream as any).scheduledEndPlanned)
+        : new Date(start.getTime() + 30 * 60 * 1000);
+    const title = (stream as any).title || 'Vivo en Avellaneda en Vivo';
+    const shopName = (stream as any).shop?.name || 'Distrito Moda';
+    const location = (stream as any).shop?.address || 'Avellaneda en Vivo';
+    const detailsParts = [`Tienda: ${shopName}`];
+    if ((stream as any).url) {
+      detailsParts.push(`Enlace: ${(stream as any).url}`);
+    }
+
+    const icsContent = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Distrito Moda//Avellaneda en Vivo//ES',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'BEGIN:VEVENT',
+      `UID:${(stream as any).id}@avellaneda-envivo`,
+      `DTSTAMP:${formatICSDate(new Date())}`,
+      `DTSTART:${formatICSDate(start)}`,
+      `DTEND:${formatICSDate(end)}`,
+      `SUMMARY:${escapeICSValue(title)}`,
+      `DESCRIPTION:${escapeICSValue(detailsParts.join('\n'))}`,
+      `LOCATION:${escapeICSValue(location)}`,
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+    res.setHeader('Content-Disposition', `inline; filename="avellaneda-en-vivo-${(stream as any).id}.ics"`);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(icsContent);
+  } catch (error) {
+    return res.status(500).send('Error al generar calendario.');
   }
 };
 

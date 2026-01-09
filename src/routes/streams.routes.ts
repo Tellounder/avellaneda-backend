@@ -6,6 +6,7 @@ const router = Router();
 
 router.post('/run-lifecycle', requireAdmin, StreamsController.runStreamLifecycle);
 router.get('/', StreamsController.getStreams);
+router.get('/:id/calendar.ics', StreamsController.getStreamCalendar);
 router.get('/:id', StreamsController.getStreamById);
 router.post('/', requireShopOrAdmin((req) => req.body?.shopId || req.body?.shop?.id), StreamsController.createStream);
 router.put('/:id', requireAuth, StreamsController.updateStream);

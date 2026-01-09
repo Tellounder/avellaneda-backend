@@ -9,6 +9,7 @@ router.post('/', requireAdmin, ShopsController.createShop);
 // -------------------------------------------------------
 
 router.get('/', ShopsController.getShops);
+router.get('/check-email', ShopsController.checkShopEmail);
 router.get('/:id', ShopsController.getShopById);
 router.put('/:id', requireShopOrAdmin((req) => req.params.id), ShopsController.updateShop);
 router.post('/:id/buy-stream-quota', requireShopOrAdmin((req) => req.params.id), ShopsController.buyStreamQuota);

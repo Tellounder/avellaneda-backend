@@ -56,6 +56,21 @@ const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 
 const buildTechnicalEmail = (shopId: string) => `shop_${shopId}@${TECH_EMAIL_DOMAIN}`;
 
+export const isShopEmail = async (email: string) => {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return false;
+  const existing = await prisma.shop.findFirst({
+    where: {
+      email: {
+        equals: normalizedEmail,
+        mode: 'insensitive',
+      },
+    },
+    select: { id: true },
+  });
+  return Boolean(existing);
+};
+
 const hashPassword = (value?: string | null) => {
   if (!value) return null;
   const salt = randomBytes(16).toString('hex');

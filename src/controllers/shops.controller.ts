@@ -163,3 +163,16 @@ export const assignOwner = async (req: Request, res: Response) => {
     res.status(400).json({ message: error.message || 'Error al asignar dueño', error });
   }
 };
+
+export const checkShopEmail = async (req: Request, res: Response) => {
+  try {
+    const email = String(req.query.email || '').trim();
+    if (!email) {
+      return res.status(400).json({ message: 'Email requerido.' });
+    }
+    const exists = await ShopsService.isShopEmail(email);
+    res.json({ exists });
+  } catch (error) {
+    res.status(500).json({ message: 'Error al validar email', error });
+  }
+};

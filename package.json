@@ -8,6 +8,7 @@
     "backfill:authusers": "ts-node scripts/backfill-authusers.ts",
     "backfill:quotawallets": "ts-node scripts/backfill-quotawallets.ts",
     "doctor": "powershell -ExecutionPolicy Bypass -File .\\scripts\\doctor-p3p4.ps1",
+    "import:shops": "ts-node scripts/import-shops-from-json.ts",
     "sanctions:run": "ts-node scripts/run-sanciones.ts"
   },
   "dependencies": {

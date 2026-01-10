@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { ShopStatus } from '@prisma/client';
+import { ShopStatus, SocialPlatform } from '@prisma/client';
 import prisma from '../prisma/client';
 import { createQuotaWalletFromLegacy } from '../src/services/quota.service';
 
@@ -28,6 +28,36 @@ const parseNumber = (value: unknown) => {
 const parseActive = (value: unknown) => {
   const raw = String(value || '').trim().toLowerCase();
   return ['si', 'sí', 'yes', 'true', '1', 'activo'].includes(raw);
+};
+
+const resolveLogoUrl = (row: RawShop) => {
+  const raw = row['Logo_URL'] ?? row['logo_url'] ?? '';
+  const value = String(raw || '').trim();
+  return value || null;
+};
+
+const resolveInstagramHandle = (row: RawShop) => {
+  const raw = row['Instagram_URL'] ?? row['instagram_url'] ?? '';
+  let value = String(raw || '').trim();
+  if (!value) return null;
+
+  const lower = value.toLowerCase();
+  if (lower.includes('instagram.com')) {
+    if (!/^https?:\/\//i.test(value)) {
+      value = `https://${value}`;
+    }
+    try {
+      const url = new URL(value);
+      value = url.pathname.split('/').filter(Boolean)[0] || '';
+    } catch {
+      const parts = value.split('instagram.com/');
+      value = parts[1] || value;
+    }
+  }
+
+  value = value.replace(/^@/, '');
+  value = value.split(/[?#/]/)[0].trim();
+  return value || null;
 };
 
 const buildAddress = (row: RawShop) => {
@@ -137,17 +167,26 @@ const run = async () => {
     const minimumPurchase = parseNumber(row['Mínimo de Compra']);
     const isActive = parseActive(row['Activo']);
     const status = isActive ? ShopStatus.ACTIVE : ShopStatus.HIDDEN;
+    const logoUrl = resolveLogoUrl(row);
+    const instagramHandle = resolveInstagramHandle(row);
 
     const existing = existingByEmail.get(email);
 
     if (existing) {
       if (!skipExisting) {
+        const socialHandlesUpdate = instagramHandle
+          ? {
+              deleteMany: { platform: SocialPlatform.Instagram },
+              create: [{ platform: SocialPlatform.Instagram, handle: instagramHandle }],
+            }
+          : undefined;
         await prisma.shop.update({
           where: { id: existing.id },
           data: {
             name,
             razonSocial: name,
             email,
+            ...(logoUrl ? { logoUrl } : {}),
             address: address || undefined,
             addressDetails: details,
             minimumPurchase,
@@ -157,6 +196,7 @@ const run = async () => {
             whatsappLines: whatsapp
               ? { deleteMany: {}, create: [{ label: 'Principal', number: whatsapp }] }
               : { deleteMany: {} },
+            ...(socialHandlesUpdate ? { socialHandles: socialHandlesUpdate } : {}),
           },
         });
 
@@ -183,6 +223,7 @@ const run = async () => {
         razonSocial: name,
         slug,
         email,
+        ...(logoUrl ? { logoUrl } : {}),
         address: address || undefined,
         addressDetails: details,
         minimumPurchase,
@@ -191,6 +232,9 @@ const run = async () => {
         status,
         statusChangedAt: new Date(),
         active: isActive,
+        ...(instagramHandle
+          ? { socialHandles: { create: [{ platform: SocialPlatform.Instagram, handle: instagramHandle }] } }
+          : {}),
         ...(whatsapp
           ? { whatsappLines: { create: [{ label: 'Principal', number: whatsapp }] } }
           : {}),

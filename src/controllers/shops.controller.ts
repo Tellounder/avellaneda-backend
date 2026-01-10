@@ -146,6 +146,15 @@ export const resetShopPassword = async (req: Request, res: Response) => {
   }
 };
 
+export const deleteShop = async (req: Request, res: Response) => {
+  try {
+    const data = await ShopsService.deleteShop(req.params.id);
+    res.json(data);
+  } catch (error: any) {
+    res.status(400).json({ message: error.message || 'Error al eliminar tienda', error });
+  }
+};
+
 export const acceptShop = async (req: Request, res: Response) => {
   try {
     const data = await ShopsService.acceptShop(req.params.id, req.auth?.authUserId || '');

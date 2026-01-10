@@ -11,6 +11,7 @@ router.post('/', requireAdmin, ShopsController.createShop);
 router.get('/', ShopsController.getShops);
 router.get('/check-email', ShopsController.checkShopEmail);
 router.get('/:id', ShopsController.getShopById);
+router.delete('/:id', requireAdmin, ShopsController.deleteShop);
 router.put('/:id', requireShopOrAdmin((req) => req.params.id), ShopsController.updateShop);
 router.post('/:id/buy-stream-quota', requireShopOrAdmin((req) => req.params.id), ShopsController.buyStreamQuota);
 router.post('/:id/buy-reel-quota', requireShopOrAdmin((req) => req.params.id), ShopsController.buyReelQuota);

@@ -786,3 +786,48 @@ export const resetShopPassword = async (id: string) => {
   const resetLink = await firebaseAuth.generatePasswordResetLink(email);
   return { resetLink };
 };
+
+export const deleteShop = async (id: string) => {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.shop.findUnique({ where: { id }, select: { id: true } });
+    if (!existing) {
+      throw new Error('Tienda no encontrada.');
+    }
+
+    const streams = await tx.stream.findMany({
+      where: { shopId: id },
+      select: { id: true },
+    });
+    const streamIds = streams.map((stream) => stream.id);
+    if (streamIds.length > 0) {
+      await tx.agenda.deleteMany({ where: { streamId: { in: streamIds } } });
+      await tx.review.deleteMany({ where: { streamId: { in: streamIds } } });
+      await tx.report.deleteMany({ where: { streamId: { in: streamIds } } });
+      await tx.streamLike.deleteMany({ where: { streamId: { in: streamIds } } });
+      await tx.liveScheduleEvent.deleteMany({ where: { liveId: { in: streamIds } } });
+      await tx.stream.deleteMany({ where: { id: { in: streamIds } } });
+    }
+
+    const reels = await tx.reel.findMany({
+      where: { shopId: id },
+      select: { id: true },
+    });
+    const reelIds = reels.map((reel) => reel.id);
+    if (reelIds.length > 0) {
+      await tx.reelView.deleteMany({ where: { reelId: { in: reelIds } } });
+      await tx.reel.deleteMany({ where: { id: { in: reelIds } } });
+    }
+
+    await tx.favorite.deleteMany({ where: { shopId: id } });
+    await tx.penalty.deleteMany({ where: { shopId: id } });
+    await tx.shopSocialHandle.deleteMany({ where: { shopId: id } });
+    await tx.shopWhatsappLine.deleteMany({ where: { shopId: id } });
+    await tx.quotaTransaction.deleteMany({ where: { shopId: id } });
+    await tx.purchaseRequest.deleteMany({ where: { shopId: id } });
+    await tx.agendaSuspension.deleteMany({ where: { shopId: id } });
+    await tx.liveScheduleEvent.deleteMany({ where: { shopId: id } });
+    await tx.quotaWallet.deleteMany({ where: { shopId: id } });
+
+    return tx.shop.delete({ where: { id } });
+  });
+};

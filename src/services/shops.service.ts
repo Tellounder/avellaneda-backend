@@ -262,6 +262,7 @@ export const createShop = async (data: any) => {
   const active = data.active !== undefined ? Boolean(data.active) : true;
   const shopId = data.id || randomUUID();
   const normalizedEmail = normalizeEmail(data.email);
+  const coverUrl = String(data.coverUrl || '').trim();
   let authEmail = normalizedEmail;
   let requiresEmailFix = false;
 
@@ -310,6 +311,7 @@ export const createShop = async (data: any) => {
         name: data.name,
         slug: data.slug || data.name.toLowerCase().replace(/ /g, '-'),
         logoUrl: data.logoUrl || '',
+        coverUrl: coverUrl || undefined,
         website: data.website,
         razonSocial: data.razonSocial,
         cuit: data.cuit,
@@ -354,6 +356,8 @@ export const updateShop = async (id: string, data: any) => {
   const whatsappLines = data.whatsappLines !== undefined ? buildWhatsappLines(data.whatsappLines) : null;
   const status = data.status !== undefined ? normalizeShopStatus(data.status) : undefined;
   const normalizedEmail = data.email !== undefined ? normalizeEmail(data.email) : undefined;
+  const coverUrl =
+    data.coverUrl !== undefined ? (String(data.coverUrl || '').trim() || null) : undefined;
 
   if (normalizedEmail) {
     const existingShop = await prisma.shop.findFirst({
@@ -377,6 +381,7 @@ export const updateShop = async (id: string, data: any) => {
     email: normalizedEmail,
     address: data.address,
     logoUrl: data.logoUrl,
+    coverUrl,
     website: data.website,
     addressDetails: data.addressDetails,
     paymentMethods: data.paymentMethods,

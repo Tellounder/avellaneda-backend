@@ -7,6 +7,7 @@ import { createQuotaWalletFromLegacy } from '../src/services/quota.service';
 type RawShop = Record<string, unknown>;
 
 const DEFAULT_JSON_PATH = '/home/analia/Escritorio/datos_convertidos.json';
+const FALLBACK_JSON_PATH = '/home/analia/Escritorio/datos_convertidos .json';
 
 const normalizeEmail = (value: unknown) => String(value || '').trim().toLowerCase();
 const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -32,6 +33,17 @@ const parseActive = (value: unknown) => {
 
 const resolveLogoUrl = (row: RawShop) => {
   const raw = row['Logo_URL'] ?? row['logo_url'] ?? '';
+  const value = String(raw || '').trim();
+  return value || null;
+};
+
+const resolveCoverUrl = (row: RawShop) => {
+  const raw =
+    row['imagen_destacada_url'] ??
+    row['Imagen destacada'] ??
+    row['imagen_destacada'] ??
+    row['cover_url'] ??
+    '';
   const value = String(raw || '').trim();
   return value || null;
 };
@@ -113,7 +125,9 @@ const ensureUniqueSlug = (base: string, existing: Set<string>) => {
 };
 
 const run = async () => {
-  const jsonPath = process.argv[2] || DEFAULT_JSON_PATH;
+  const jsonPath =
+    process.argv[2] ||
+    (fs.existsSync(DEFAULT_JSON_PATH) ? DEFAULT_JSON_PATH : FALLBACK_JSON_PATH);
   const skipExisting = process.argv.includes('--skip-existing');
   const skipWallet = process.argv.includes('--no-wallet');
   if (!fs.existsSync(jsonPath)) {
@@ -168,6 +182,7 @@ const run = async () => {
     const isActive = parseActive(row['Activo']);
     const status = isActive ? ShopStatus.ACTIVE : ShopStatus.HIDDEN;
     const logoUrl = resolveLogoUrl(row);
+    const coverUrl = resolveCoverUrl(row);
     const instagramHandle = resolveInstagramHandle(row);
 
     const existing = existingByEmail.get(email);
@@ -187,6 +202,7 @@ const run = async () => {
             razonSocial: name,
             email,
             ...(logoUrl ? { logoUrl } : {}),
+            ...(coverUrl ? { coverUrl } : {}),
             address: address || undefined,
             addressDetails: details,
             minimumPurchase,
@@ -224,6 +240,7 @@ const run = async () => {
         slug,
         email,
         ...(logoUrl ? { logoUrl } : {}),
+        ...(coverUrl ? { coverUrl } : {}),
         address: address || undefined,
         addressDetails: details,
         minimumPurchase,

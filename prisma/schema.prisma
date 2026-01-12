@@ -185,6 +185,7 @@ model Shop {
   name            String
   slug            String   @unique
   logoUrl         String?
+  coverUrl        String?
   website         String?
   authUserId      String?  @unique
   requiresEmailFix Boolean @default(false)

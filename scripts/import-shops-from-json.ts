@@ -32,20 +32,44 @@ const parseActive = (value: unknown) => {
 };
 
 const resolveLogoUrl = (row: RawShop) => {
-  const raw = row['Logo_URL'] ?? row['logo_url'] ?? '';
+  const raw =
+    row['Logo_URL'] ??
+    row['logo_trans_url'] ??
+    row['logo_url'] ??
+    row['logo'] ??
+    '';
   const value = String(raw || '').trim();
   return value || null;
 };
 
+const isImageUrl = (value: string) => {
+  if (!value) return false;
+  if (/\/sites\/default\/files\//i.test(value)) return true;
+  return /\.(png|jpe?g|webp|gif|svg)(\?|$)/i.test(value);
+};
+
 const resolveCoverUrl = (row: RawShop) => {
-  const raw =
-    row['imagen_destacada_url'] ??
-    row['Imagen destacada'] ??
-    row['imagen_destacada'] ??
-    row['cover_url'] ??
-    '';
+  const candidates = [
+    row['imagen_tienda_url'],
+    row['imagen_destacada_url'],
+    row['Imagen destacada'],
+    row['imagen_destacada'],
+    row['url_imagen'],
+    row['cover_url'],
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate || '').trim();
+    if (value && isImageUrl(value)) return value;
+  }
+  return null;
+};
+
+const resolveWebsiteUrl = (row: RawShop) => {
+  const raw = row['url_tienda'] ?? row['url_catalogo'] ?? '';
   const value = String(raw || '').trim();
-  return value || null;
+  if (!value) return null;
+  if (isImageUrl(value)) return null;
+  return value;
 };
 
 const resolveInstagramHandle = (row: RawShop) => {
@@ -73,18 +97,28 @@ const resolveInstagramHandle = (row: RawShop) => {
 };
 
 const buildAddress = (row: RawShop) => {
-  const street = String(row['Calle'] || '').trim();
+  const rawStreet = String(row['Calle'] || '').trim();
+  let street = rawStreet;
+  let number = '';
+  const match = rawStreet.match(/^(.*)\s+(\d+[a-zA-Z]?)$/);
+  if (match) {
+    street = match[1].trim();
+    number = match[2].trim();
+  }
   const postal = String(row['Código postal'] || '').trim();
   const city = String(row['Ciudad'] || '').trim();
   const province = String(row['Provincia'] || '').trim();
-  const parts = [street, postal, city, province].filter(Boolean);
+  const parts = [rawStreet, postal, city, province].filter(Boolean);
   return {
     address: parts.length > 0 ? parts.join(', ') : null,
     details: {
       street: street || undefined,
-      postalCode: postal || undefined,
+      number: number || undefined,
       city: city || undefined,
       province: province || undefined,
+      zip: postal || undefined,
+      legacyUid: row['Uid'] ?? row['UID'] ?? row['uid'] ?? undefined,
+      legacySource: 'distritomoda',
     },
   };
 };
@@ -183,6 +217,7 @@ const run = async () => {
     const status = isActive ? ShopStatus.ACTIVE : ShopStatus.HIDDEN;
     const logoUrl = resolveLogoUrl(row);
     const coverUrl = resolveCoverUrl(row);
+    const websiteUrl = resolveWebsiteUrl(row);
     const instagramHandle = resolveInstagramHandle(row);
 
     const existing = existingByEmail.get(email);
@@ -203,6 +238,7 @@ const run = async () => {
             email,
             ...(logoUrl ? { logoUrl } : {}),
             ...(coverUrl ? { coverUrl } : {}),
+            ...(websiteUrl ? { website: websiteUrl } : {}),
             address: address || undefined,
             addressDetails: details,
             minimumPurchase,
@@ -241,6 +277,7 @@ const run = async () => {
         email,
         ...(logoUrl ? { logoUrl } : {}),
         ...(coverUrl ? { coverUrl } : {}),
+        ...(websiteUrl ? { website: websiteUrl } : {}),
         address: address || undefined,
         addressDetails: details,
         minimumPurchase,

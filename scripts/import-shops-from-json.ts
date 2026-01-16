@@ -33,6 +33,8 @@ const parseActive = (value: unknown) => {
 
 const resolveLogoUrl = (row: RawShop) => {
   const raw =
+    row['logourl'] ??
+    row['logoUrl'] ??
     row['Logo_URL'] ??
     row['logo_trans_url'] ??
     row['logo_url'] ??

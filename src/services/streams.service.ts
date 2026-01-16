@@ -179,12 +179,13 @@ export const createStream = async (data: any) => {
   const shopId = String(data.shopId || data.shop?.id || '');
   const scheduledEndPlanned = new Date(scheduledAt.getTime() + 30 * 60 * 1000);
 
-  return prisma.$transaction(async (tx) => {
-    let reservation: { useBase: boolean } | null = null;
-    if (!isAdminOverride) {
-      await validateStreamSchedule(data, undefined, tx);
-      reservation = await reserveLiveQuota(shopId, scheduledAt, tx);
-    }
+  return prisma.$transaction(
+    async (tx) => {
+      let reservation: { useBase: boolean } | null = null;
+      if (!isAdminOverride) {
+        await validateStreamSchedule(data, undefined, tx);
+        reservation = await reserveLiveQuota(shopId, scheduledAt, tx);
+      }
 
     const stream = await tx.stream.create({
       data: {
@@ -229,8 +230,13 @@ export const createStream = async (data: any) => {
       );
     }
 
-    return stream;
-  });
+      return stream;
+    },
+    {
+      maxWait: 5000,
+      timeout: 15000,
+    }
+  );
 };
 
 export const updateStream = async (id: string, data: any) => {

@@ -43,11 +43,19 @@ export const getReelsByShop = async (shopId: string) => {
   });
 };
 
-export const createReel = async (shopId: string, url: string, platform: string) => {
+export const createReel = async (
+  shopId: string,
+  url: string,
+  platform: string,
+  options?: { isAdminOverride?: boolean }
+) => {
   const normalizedPlatform = normalizePlatform(platform);
+  const isAdminOverride = Boolean(options?.isAdminOverride);
   return prisma.$transaction(
     async (tx) => {
-      const reservation = await reserveReelQuota(shopId, new Date(), tx);
+      const reservation = isAdminOverride
+        ? null
+        : await reserveReelQuota(shopId, new Date(), tx);
       const reel = await tx.reel.create({
         data: {
           shopId,
@@ -59,20 +67,22 @@ export const createReel = async (shopId: string, url: string, platform: string) 
         include: { shop: true },
       });
 
-      await createQuotaTransaction(
-        {
-          shopId,
-          resource: QuotaResource.REEL,
-          direction: QuotaDirection.DEBIT,
-          amount: 1,
-          reason: reservation.useBase ? QuotaReason.PLAN_BASE : QuotaReason.PURCHASE,
-          refType: QuotaRefType.SYSTEM,
-          refId: reel.id,
-          actorType: QuotaActorType.SHOP,
-          actorId: shopId,
-        },
-        tx
-      );
+      if (reservation) {
+        await createQuotaTransaction(
+          {
+            shopId,
+            resource: QuotaResource.REEL,
+            direction: QuotaDirection.DEBIT,
+            amount: 1,
+            reason: reservation.useBase ? QuotaReason.PLAN_BASE : QuotaReason.PURCHASE,
+            refType: QuotaRefType.SYSTEM,
+            refId: reel.id,
+            actorType: QuotaActorType.SHOP,
+            actorId: shopId,
+          },
+          tx
+        );
+      }
 
       return reel;
     },

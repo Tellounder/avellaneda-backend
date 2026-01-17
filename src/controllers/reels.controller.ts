@@ -45,7 +45,11 @@ export const createReel = async (req: Request, res: Response) => {
     return res.status(403).json({ message: 'Permisos insuficientes.' });
   }
   const { shopId, url, platform } = req.body;
-  const data = await ReelsService.createReel(shopId, url, platform);
+  const isAdminOverride =
+    req.auth.userType === 'ADMIN' ? Boolean(req.body?.isAdminOverride ?? true) : false;
+  const data = await ReelsService.createReel(shopId, url, platform, {
+    isAdminOverride,
+  });
   res.json(sanitizeReelPayload(data));
 };
 

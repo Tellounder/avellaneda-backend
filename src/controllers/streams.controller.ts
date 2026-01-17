@@ -139,7 +139,12 @@ export const createStream = async (req: Request, res: Response) => {
     } else if (req.auth.userType !== 'ADMIN') {
       return res.status(403).json({ message: 'Permisos insuficientes.' });
     }
-    const data = await StreamsService.createStream(req.body);
+    const isAdminOverride =
+      req.auth.userType === 'ADMIN' ? Boolean(req.body?.isAdminOverride) : false;
+    const data = await StreamsService.createStream({
+      ...req.body,
+      isAdminOverride,
+    });
     res.json(sanitizeStreamPayload(data, req));
   } catch (error: any) {
     res.status(400).json({ message: error.message || 'Error al crear vivo', error });
@@ -149,7 +154,12 @@ export const createStream = async (req: Request, res: Response) => {
 export const updateStream = async (req: Request, res: Response) => {
   try {
     await ensureStreamAccess(req, req.params.id);
-    const data = await StreamsService.updateStream(req.params.id, req.body);
+    const isAdminOverride =
+      req.auth?.userType === 'ADMIN' ? Boolean(req.body?.isAdminOverride) : false;
+    const data = await StreamsService.updateStream(req.params.id, {
+      ...req.body,
+      isAdminOverride,
+    });
     res.json(sanitizeStreamPayload(data, req));
   } catch (error: any) {
     const status = error?.status || 400;

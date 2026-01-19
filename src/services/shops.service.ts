@@ -160,6 +160,73 @@ const shopInclude = {
   quotaWallet: true,
 };
 
+const toMapString = (value: unknown) => {
+  if (value === null || value === undefined) return '';
+  const text = String(value).trim();
+  return text;
+};
+
+const toMapNumber = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const getAddressField = (details: Record<string, unknown>, key: string) =>
+  toMapString(details[key] ?? '');
+
+const getSocialUrl = (handles: { platform: SocialPlatform; handle: string }[], platform: SocialPlatform) => {
+  const match = handles.find((item) => item.platform === platform);
+  if (!match?.handle) return '';
+  if (match.handle.startsWith('http')) return match.handle;
+  if (platform === 'Instagram') return `https://instagram.com/${match.handle}`;
+  if (platform === 'TikTok') return `https://tiktok.com/@${match.handle}`;
+  if (platform === 'Facebook') return `https://facebook.com/${match.handle}`;
+  if (platform === 'YouTube') return `https://youtube.com/${match.handle}`;
+  return match.handle;
+};
+
+export const getShopsMapData = async () => {
+  const shops = await prisma.shop.findMany({
+    include: {
+      socialHandles: true,
+      whatsappLines: true,
+    },
+  });
+
+  return shops.map((shop) => {
+    const details = (shop.addressDetails || {}) as Record<string, unknown>;
+    const whatsapp = shop.whatsappLines?.[0]?.number || '';
+    const legacyUid = toMapString(details.legacyUid || '');
+    const legacyUser = toMapString(details.legacyUser || '');
+    const legacyUserType = toMapString(details.legacyUserType || '');
+
+    return {
+      'Activo': shop.active ? 'Sí' : 'No',
+      'Uid': legacyUid || shop.id,
+      'Tipo de Usuario': legacyUserType || 'tienda',
+      'Usuario': legacyUser || shop.slug || shop.name || '',
+      'Nombre completo': shop.name || '',
+      'Mail': toMapString(shop.email),
+      'Celular': toMapString(whatsapp),
+      'Mínimo de Compra': shop.minimumPurchase ?? 0,
+      'Calle': getAddressField(details, 'street'),
+      'Código postal': getAddressField(details, 'zip'),
+      'Ciudad': getAddressField(details, 'city'),
+      'Provincia': getAddressField(details, 'province'),
+      'Plan de Suscripcion': toMapString(shop.plan),
+      'Logo_URL': toMapString(shop.logoUrl),
+      'imagen_destacada_url': toMapString(shop.coverUrl),
+      'url_catalogo': toMapString(details.catalogUrl),
+      'Instagram_URL': getSocialUrl(shop.socialHandles || [], 'Instagram'),
+      'url_tienda': toMapString(shop.website),
+      'url_imagen': toMapString(details.imageUrl),
+      'imagen_tienda_url': toMapString(details.storeImageUrl),
+      'lat': toMapNumber(details.lat),
+      'lng': toMapNumber(details.lng),
+    };
+  });
+};
+
 export const getShops = async () => {
   const shops = await prisma.shop.findMany({
     orderBy: { name: 'asc' },

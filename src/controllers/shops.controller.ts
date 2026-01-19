@@ -50,6 +50,15 @@ export const getShopById = async (req: Request, res: Response) => {
   }
 };
 
+export const getShopsMapData = async (_req: Request, res: Response) => {
+  try {
+    const data = await ShopsService.getShopsMapData();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ message: 'Error al obtener mapa de tiendas', error });
+  }
+};
+
 // --- NUEVA FUNCIÓN AGREGADA: El "Mozo" toma el pedido de crear tienda ---
 export const createShop = async (req: Request, res: Response) => {
   try {

@@ -187,6 +187,10 @@ const getSocialUrl = (handles: { platform: SocialPlatform; handle: string }[], p
 
 export const getShopsMapData = async () => {
   const shops = await prisma.shop.findMany({
+    where: {
+      active: true,
+      status: ShopStatus.ACTIVE,
+    },
     include: {
       socialHandles: true,
       whatsappLines: true,

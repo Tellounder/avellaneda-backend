@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import * as ReelsService from '../services/reels.service';
+import { getWhatsappLimit } from '../services/shops.service';
 
 const stripShopPrivateFields = (shop: any) => {
   if (!shop) return shop;
@@ -7,11 +8,27 @@ const stripShopPrivateFields = (shop: any) => {
   return rest;
 };
 
-const sanitizeReelPayload = (payload: any) => {
+const applyWhatsappPrivacy = (shop: any, req: Request) => {
+  if (!shop) return shop;
+  const lines = Array.isArray(shop.whatsappLines) ? shop.whatsappLines : [];
+  if (!req.auth) {
+    return { ...shop, whatsappLines: [] };
+  }
+  if (req.auth.userType === 'ADMIN') {
+    return shop;
+  }
+  if (req.auth.userType === 'SHOP' && req.auth.shopId === shop.id) {
+    return shop;
+  }
+  const limit = getWhatsappLimit(shop.plan);
+  return { ...shop, whatsappLines: lines.slice(0, limit) };
+};
+
+const sanitizeReelPayload = (payload: any, req: Request) => {
   if (!payload) return payload;
   const sanitizeOne = (reel: any) => {
     if (reel?.shop) {
-      reel.shop = stripShopPrivateFields(reel.shop);
+      reel.shop = applyWhatsappPrivacy(stripShopPrivateFields(reel.shop), req);
     }
     return reel;
   };
@@ -21,17 +38,17 @@ const sanitizeReelPayload = (payload: any) => {
 
 export const getActiveReels = async (req: Request, res: Response) => {
   const data = await ReelsService.getActiveReels();
-  res.json(sanitizeReelPayload(data));
+  res.json(sanitizeReelPayload(data, req));
 };
 
 export const getAllReelsAdmin = async (req: Request, res: Response) => {
   const data = await ReelsService.getAllReelsAdmin();
-  res.json(sanitizeReelPayload(data));
+  res.json(sanitizeReelPayload(data, req));
 };
 
 export const getReelsByShop = async (req: Request, res: Response) => {
   const data = await ReelsService.getReelsByShop(req.params.shopId);
-  res.json(sanitizeReelPayload(data));
+  res.json(sanitizeReelPayload(data, req));
 };
 
 export const createReel = async (req: Request, res: Response) => {
@@ -50,17 +67,17 @@ export const createReel = async (req: Request, res: Response) => {
   const data = await ReelsService.createReel(shopId, url, platform, {
     isAdminOverride,
   });
-  res.json(sanitizeReelPayload(data));
+  res.json(sanitizeReelPayload(data, req));
 };
 
 export const hideReel = async (req: Request, res: Response) => {
   const data = await ReelsService.hideReel(req.params.id);
-  res.json(sanitizeReelPayload(data));
+  res.json(sanitizeReelPayload(data, req));
 };
 
 export const reactivateReel = async (req: Request, res: Response) => {
   const data = await ReelsService.reactivateReel(req.params.id);
-  res.json(sanitizeReelPayload(data));
+  res.json(sanitizeReelPayload(data, req));
 };
 
 export const registerView = async (req: Request, res: Response) => {

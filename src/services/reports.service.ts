@@ -2,6 +2,15 @@ import { ReportStatus } from '@prisma/client';
 import prisma from '../../prisma/client';
 
 export const reportStream = async (streamId: string, userId: string) => {
+  if (!userId) {
+    throw new Error('Usuario requerido para reportar.');
+  }
+  const existing = await prisma.report.findFirst({
+    where: { streamId, userId },
+  });
+  if (existing) {
+    throw new Error('Ya reportaste este vivo.');
+  }
   return prisma.report.create({
     data: {
       streamId,

@@ -14,7 +14,7 @@ import {
 import prisma from '../../prisma/client';
 import { getShopRatingsMap } from './ratings.service';
 import { createQuotaTransaction, getLiveQuotaSnapshot, reserveLiveQuota } from './quota.service';
-import { notifyAdmins } from './notifications.service';
+import { createNotification, notifyAdmins } from './notifications.service';
 
 const normalizePlatform = (value: unknown): SocialPlatform => {
   if (value === 'Instagram' || value === 'TikTok' || value === 'Facebook' || value === 'YouTube') {
@@ -42,6 +42,27 @@ const getDayRange = (date: Date) => {
   const end = new Date(date);
   end.setHours(23, 59, 59, 999);
   return { start, end };
+};
+
+const clearRemindersForStream = async (streamId: string) => {
+  const agendaUsers = await prisma.agenda.findMany({
+    where: { streamId },
+    select: { userId: true },
+  });
+  if (agendaUsers.length === 0) return;
+
+  await prisma.agenda.deleteMany({ where: { streamId } });
+
+  await prisma.notification.createMany({
+    data: agendaUsers.map((entry) => ({
+      userId: entry.userId,
+      message: 'El vivo que agendaste fue cancelado o suspendido.',
+      read: false,
+      type: NotificationType.SYSTEM,
+      refId: streamId,
+      notifyAt: null,
+    })),
+  });
 };
 
 const hasSocialHandle = (handles: { platform: SocialPlatform }[], platform: SocialPlatform) =>
@@ -309,6 +330,9 @@ export const deleteStream = async (id: string) => {
 };
 
 export const reportStream = async (streamId: string, userId: string, payload?: { reason?: string }) => {
+  if (!userId) {
+    throw new Error('Usuario requerido para reportar.');
+  }
   const stream = await prisma.stream.findUnique({
     where: { id: streamId },
     include: { shop: true },
@@ -332,7 +356,7 @@ export const reportStream = async (streamId: string, userId: string, payload?: {
   const report = await prisma.report.create({
     data: {
       streamId,
-      userId: userId || null,
+      userId,
       reason,
       resolved: false,
       status: ReportStatus.OPEN,
@@ -501,7 +525,7 @@ export const cancelStream = async (id: string, reason?: string) => {
   if (![StreamStatus.UPCOMING, StreamStatus.PENDING_REPROGRAMMATION].includes(stream.status)) {
     throw new Error('Solo puedes cancelar vivos programados.');
   }
-  return prisma.stream.update({
+  const updated = await prisma.stream.update({
     where: { id },
     data: {
       status: StreamStatus.CANCELLED,
@@ -509,6 +533,8 @@ export const cancelStream = async (id: string, reason?: string) => {
       cancelReason: reason || 'Cancelado por tienda',
     },
   });
+  await clearRemindersForStream(id);
+  return updated;
 };
 
 export const banStream = async (id: string, reason?: string) => {
@@ -538,6 +564,7 @@ export const banStream = async (id: string, reason?: string) => {
     where: { shopId: stream.shopId },
     data: { hidden: true },
   });
+  await clearRemindersForStream(id);
   return stream;
 };
 

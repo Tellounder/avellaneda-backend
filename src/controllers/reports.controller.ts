@@ -3,10 +3,10 @@ import * as ReportsService from '../services/reports.service';
 
 export const reportStream = async (req: Request, res: Response) => {
   try {
-    if (!req.body?.userId) {
-      return res.status(400).json({ message: 'userId requerido para reportar' });
+    if (!req.auth || req.auth.userType !== 'CLIENT') {
+      return res.status(403).json({ message: 'Debes iniciar sesion como cliente.' });
     }
-    const data = await ReportsService.reportStream(req.params.id, req.body.userId);
+    const data = await ReportsService.reportStream(req.params.id, req.auth.authUserId);
     res.json(data);
   } catch (error) {
     res.status(500).json({ message: 'Error al crear reporte', error });

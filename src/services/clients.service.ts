@@ -2,6 +2,9 @@ import { NotificationType, StreamStatus } from '@prisma/client';
 import prisma from '../../prisma/client';
 import { createNotification } from './notifications.service';
 
+const subtractMinutes = (date: Date, minutes: number) =>
+  new Date(date.getTime() - minutes * 60 * 1000);
+
 const listFavorites = async (userId: string) => {
   const favorites = await prisma.favorite.findMany({
     where: { userId },
@@ -95,7 +98,11 @@ export const addReminder = async (authUserId: string, streamId: string) => {
     const dateLabel = stream.scheduledAt
       ? new Date(stream.scheduledAt).toLocaleString('es-AR', { dateStyle: 'medium', timeStyle: 'short' })
       : 'fecha pendiente';
-    await createNotification(authUserId, `Recordatorio activo: ${stream.title} (${dateLabel}).`);
+    await createNotification(authUserId, `Recordatorio activo: ${stream.title} (${dateLabel}).`, {
+      type: NotificationType.REMINDER,
+      refId: stream.id,
+      notifyAt: stream.scheduledAt ? subtractMinutes(new Date(stream.scheduledAt), 15) : null,
+    });
   }
   return listReminders(authUserId);
 };

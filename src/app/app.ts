@@ -15,6 +15,7 @@ import notificationsRoutes from '../routes/notifications.routes';
 import authRoutes from '../routes/auth.routes';
 import clientsRoutes from '../routes/clients.routes';
 import systemRoutes from '../routes/system.routes';
+import paymentsRoutes from '../routes/payments.routes';
 import { optionalAuth } from '../middleware/auth';
 
 const app = express();
@@ -38,7 +39,13 @@ app.use(
       : undefined
   )
 );
-app.use(express.json());
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      req.rawBody = buf.toString('utf8');
+    },
+  })
+);
 app.use(morgan('dev'));
 app.use(optionalAuth);
 
@@ -55,5 +62,6 @@ app.use('/notifications', notificationsRoutes);
 app.use('/auth', authRoutes);
 app.use('/clients', clientsRoutes);
 app.use('/system', systemRoutes);
+app.use('/payments', paymentsRoutes);
 
 export default app;

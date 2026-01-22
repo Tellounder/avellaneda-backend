@@ -1,4 +1,4 @@
-import { NotificationType, StreamStatus } from '@prisma/client';
+import { NotificationStatus, NotificationType, ReminderStatus, StreamStatus } from '@prisma/client';
 import prisma from '../../prisma/client';
 import { createNotification } from './notifications.service';
 
@@ -15,7 +15,7 @@ const listFavorites = async (userId: string) => {
 
 const listReminders = async (userId: string) => {
   const reminders = await prisma.agenda.findMany({
-    where: { userId },
+    where: { userId, status: ReminderStatus.ACTIVE },
     select: { streamId: true },
   });
   return reminders.map((item) => item.streamId);
@@ -90,33 +90,61 @@ export const addReminder = async (authUserId: string, streamId: string) => {
   if (stream.status !== StreamStatus.UPCOMING) {
     throw new Error('Solo puedes agendar recordatorios de vivos programados.');
   }
+  const notifyAt = stream.scheduledAt ? subtractMinutes(new Date(stream.scheduledAt), 15) : null;
   const existing = await prisma.agenda.findFirst({
     where: { userId: authUserId, streamId },
   });
   if (!existing) {
-    await prisma.agenda.create({ data: { userId: authUserId, streamId } });
-    const dateLabel = stream.scheduledAt
-      ? new Date(stream.scheduledAt).toLocaleString('es-AR', { dateStyle: 'medium', timeStyle: 'short' })
-      : 'fecha pendiente';
+    await prisma.agenda.create({
+      data: {
+        userId: authUserId,
+        streamId,
+        status: ReminderStatus.ACTIVE,
+        notifyAt,
+      },
+    });
+  } else if (existing.status !== ReminderStatus.ACTIVE) {
+    await prisma.agenda.update({
+      where: { id: existing.id },
+      data: { status: ReminderStatus.ACTIVE, notifyAt },
+    });
+  }
+
+  const dateLabel = stream.scheduledAt
+    ? new Date(stream.scheduledAt).toLocaleString('es-AR', { dateStyle: 'medium', timeStyle: 'short' })
+    : 'fecha pendiente';
+  const existingNotification = await prisma.notification.findFirst({
+    where: {
+      userId: authUserId,
+      type: NotificationType.REMINDER,
+      refId: stream.id,
+      status: NotificationStatus.QUEUED,
+    },
+  });
+  if (!existingNotification) {
     await createNotification(authUserId, `Recordatorio activo: ${stream.title} (${dateLabel}).`, {
       type: NotificationType.REMINDER,
       refId: stream.id,
-      notifyAt: stream.scheduledAt ? subtractMinutes(new Date(stream.scheduledAt), 15) : null,
+      notifyAt,
+      status: NotificationStatus.QUEUED,
     });
   }
   return listReminders(authUserId);
 };
 
 export const removeReminder = async (authUserId: string, streamId: string) => {
-  await prisma.agenda.deleteMany({
+  await prisma.agenda.updateMany({
     where: { userId: authUserId, streamId },
+    data: { status: ReminderStatus.CANCELED },
   });
-  await prisma.notification.deleteMany({
+  await prisma.notification.updateMany({
     where: {
       userId: authUserId,
       type: NotificationType.REMINDER,
       refId: streamId,
+      status: { in: [NotificationStatus.QUEUED, NotificationStatus.SENT] },
     },
+    data: { status: NotificationStatus.CANCELED },
   });
   return listReminders(authUserId);
 };

@@ -133,6 +133,19 @@ enum NotificationType {
   PURCHASE
 }
 
+enum ReminderStatus {
+  ACTIVE
+  CANCELED
+  SENT
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+  CANCELED
+}
+
 model AuthUser {
   id           String          @id @default(uuid())
   email        String          @unique
@@ -146,6 +159,7 @@ model AuthUser {
   admin        Admin?
   client       Client?
   reviews      Review[]
+  reports      Report[] @relation("ReportUser")
   favorites    Favorite[]
   agenda       Agenda[]
   notifications Notification[]
@@ -161,6 +175,7 @@ model Admin {
   createdAt   DateTime    @default(now())
   approvedPurchaseRequests PurchaseRequest[] @relation("ApprovedByAdmin")
   createdAgendaSuspensions AgendaSuspension[] @relation("AgendaSuspensionCreatedBy")
+  reviewedReports Report[] @relation("ReportReviewedBy")
 }
 
 model Client {
@@ -221,6 +236,9 @@ model Shop {
   socialHandles   ShopSocialHandle[]
   whatsappLines   ShopWhatsappLine[]
   favorites       Favorite[]
+  reviews         Review[]
+  reports         Report[]
+  aggregate       ShopAggregate?
   quotaWallet     QuotaWallet?
   quotaTransactions QuotaTransaction[]
   purchaseRequests PurchaseRequest[]
@@ -317,6 +335,8 @@ model Review {
   id        String   @id @default(uuid())
   streamId  String
   stream    Stream   @relation(fields: [streamId], references: [id])
+  shopId    String?
+  shop      Shop?    @relation(fields: [shopId], references: [id])
   userId    String
   user      AuthUser @relation(fields: [userId], references: [id])
   rating    Int
@@ -330,11 +350,19 @@ model Report {
   id        String   @id @default(uuid())
   streamId  String
   stream    Stream   @relation(fields: [streamId], references: [id])
-  userId    String?
+  shopId    String?
+  shop      Shop?    @relation(fields: [shopId], references: [id])
+  userId    String
+  user      AuthUser @relation("ReportUser", fields: [userId], references: [id])
   reason    String
   status    ReportStatus @default(OPEN)
   resolved  Boolean  @default(false)
+  reviewedByAdminId String?
+  reviewedByAdmin   Admin?   @relation("ReportReviewedBy", fields: [reviewedByAdminId], references: [authUserId])
+  reviewedAt        DateTime?
   createdAt DateTime @default(now())
+
+  @@unique([streamId, userId])
 }
 
 model Penalty {
@@ -362,6 +390,9 @@ model Agenda {
   user     AuthUser   @relation(fields: [userId], references: [id])
   streamId String
   stream   Stream @relation(fields: [streamId], references: [id])
+  status   ReminderStatus @default(ACTIVE)
+  notifyAt DateTime?
+  createdAt DateTime @default(now())
 
   @@unique([userId, streamId])
 }
@@ -374,6 +405,9 @@ model Notification {
   type      NotificationType @default(SYSTEM)
   refId     String?
   notifyAt  DateTime?
+  status    NotificationStatus @default(QUEUED)
+  sentAt    DateTime?
+  payload   Json?
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 }
@@ -387,6 +421,14 @@ model ReelView {
   seenAt    DateTime @default(now())
 
   @@unique([reelId, userId])
+}
+
+model ShopAggregate {
+  shopId      String   @id
+  shop        Shop     @relation(fields: [shopId], references: [id])
+  ratingAvg   Float    @default(0)
+  ratingCount Int      @default(0)
+  updatedAt   DateTime @updatedAt
 }
 
 model QuotaWallet {
@@ -430,6 +472,10 @@ model PurchaseRequest {
   approvedByAdmin   Admin?         @relation("ApprovedByAdmin", fields: [approvedByAdminId], references: [authUserId])
   paymentProofUrl   String?
   notes             String?
+  paymentProvider   String?
+  paymentStatus     String?
+  paymentRef        String?
+  paymentPreferenceId String?
 }
 
 model AgendaSuspension {

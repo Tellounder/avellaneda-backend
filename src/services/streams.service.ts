@@ -12,7 +12,7 @@ import {
   StreamStatus,
 } from '@prisma/client';
 import prisma from '../../prisma/client';
-import { getShopRatingsMap } from './ratings.service';
+import { getShopRatingsMap, updateShopAggregate } from './ratings.service';
 import { createQuotaTransaction, getLiveQuotaSnapshot, reserveLiveQuota } from './quota.service';
 import { createNotification, notifyAdmins } from './notifications.service';
 
@@ -356,6 +356,7 @@ export const reportStream = async (streamId: string, userId: string, payload?: {
   const report = await prisma.report.create({
     data: {
       streamId,
+      shopId: stream.shopId,
       userId,
       reason,
       resolved: false,
@@ -399,14 +400,17 @@ export const rateStream = async (streamId: string, data: any, userId?: string) =
     throw new Error('Ya calificaste este vivo.');
   }
 
-  return prisma.review.create({
+  const review = await prisma.review.create({
     data: {
       streamId,
+      shopId: stream.shopId,
       userId,
       rating,
       comment: data?.comment,
     },
   });
+  await updateShopAggregate(stream.shopId);
+  return review;
 };
 
 export const toggleLikeStream = async (streamId: string, userId: string) => {

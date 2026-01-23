@@ -8,6 +8,20 @@ const parsePurchaseType = (value?: string) => {
   return null;
 };
 
+const resolveReturnUrl = (req: Request) => {
+  const origin = req.headers.origin;
+  if (origin) return origin;
+  const referer = req.headers.referer;
+  if (referer) {
+    try {
+      return new URL(referer).origin;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+};
+
 export const createMercadoPagoPreference = async (req: Request, res: Response) => {
   try {
     if (!req.auth) {
@@ -37,6 +51,7 @@ export const createMercadoPagoPreference = async (req: Request, res: Response) =
       type,
       quantity,
       payerEmail: req.auth.email,
+      returnUrl: resolveReturnUrl(req),
     });
 
     return res.json(data);
@@ -58,5 +73,23 @@ export const mercadoPagoWebhook = async (req: Request, res: Response) => {
     return res.json({ received: true });
   } catch (error: any) {
     return res.status(200).json({ received: true, error: error.message || 'Webhook error' });
+  }
+};
+
+export const confirmMercadoPagoPayment = async (req: Request, res: Response) => {
+  try {
+    if (!req.auth) {
+      return res.status(401).json({ message: 'Autenticacion requerida.' });
+    }
+
+    const paymentId = String(req.body?.paymentId || req.query?.paymentId || '').trim();
+    if (!paymentId) {
+      return res.status(400).json({ message: 'paymentId requerido.' });
+    }
+
+    const result = await PaymentsService.confirmMercadoPagoPayment(paymentId, req.auth);
+    return res.json(result);
+  } catch (error: any) {
+    return res.status(400).json({ message: error.message || 'Error al confirmar pago.' });
   }
 };

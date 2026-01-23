@@ -1,14 +1,16 @@
 import crypto from 'crypto';
-import { NotificationType, PurchaseStatus, PurchaseType, QuotaActorType, QuotaRefType } from '@prisma/client';
+import { AuthUserType, NotificationType, PurchaseStatus, PurchaseType, QuotaActorType, QuotaRefType } from '@prisma/client';
 import prisma from '../../prisma/client';
 import { computeAgendaSuspended, creditLiveExtra, creditReelExtra } from './quota.service';
 import { createNotification } from './notifications.service';
+import type { AuthContext } from './auth.service';
 
 type PreferencePayload = {
   shopId: string;
   type: PurchaseType;
   quantity: number;
   payerEmail?: string;
+  returnUrl?: string;
 };
 
 type MercadoPagoPreferenceResponse = {
@@ -23,6 +25,11 @@ const MP_WEBHOOK_URL = process.env.MP_WEBHOOK_URL || '';
 
 const MP_PRICE_LIVE = Number(process.env.MP_PRICE_LIVE || '');
 const MP_PRICE_REEL = Number(process.env.MP_PRICE_REEL || '');
+
+const normalizeBaseUrl = (value?: string) => {
+  if (!value) return null;
+  return value.replace(/\/+$/, '');
+};
 
 const getUnitPrice = (type: PurchaseType) => {
   if (type === PurchaseType.LIVE_PACK) return MP_PRICE_LIVE;
@@ -77,7 +84,13 @@ const createPurchaseRequest = async (shopId: string, type: PurchaseType, quantit
   });
 };
 
-export const createMercadoPagoPreference = async ({ shopId, type, quantity, payerEmail }: PreferencePayload) => {
+export const createMercadoPagoPreference = async ({
+  shopId,
+  type,
+  quantity,
+  payerEmail,
+  returnUrl,
+}: PreferencePayload) => {
   requireAccessToken();
 
   const unitPrice = assertPricingConfigured(type);
@@ -86,7 +99,22 @@ export const createMercadoPagoPreference = async ({ shopId, type, quantity, paye
   const itemTitle =
     type === PurchaseType.LIVE_PACK ? 'Cupos de vivos' : 'Cupos de reels';
 
-  const preferencePayload = {
+  const baseReturnUrl = normalizeBaseUrl(
+    returnUrl ||
+      process.env.MP_RETURN_URL ||
+      process.env.FRONTEND_URL ||
+      process.env.APP_BASE_URL
+  );
+
+  const backUrls = baseReturnUrl
+    ? {
+        success: `${baseReturnUrl}/tienda?mp_result=success`,
+        pending: `${baseReturnUrl}/tienda?mp_result=pending`,
+        failure: `${baseReturnUrl}/tienda?mp_result=failure`,
+      }
+    : undefined;
+
+  const preferencePayload: Record<string, unknown> = {
     items: [
       {
         id: purchase.purchaseId,
@@ -104,6 +132,10 @@ export const createMercadoPagoPreference = async ({ shopId, type, quantity, paye
     payer: payerEmail ? { email: payerEmail } : undefined,
     notification_url: MP_WEBHOOK_URL || undefined,
   };
+  if (backUrls) {
+    preferencePayload.back_urls = backUrls;
+    preferencePayload.auto_return = 'approved';
+  }
 
   const response = await fetch(`${MP_BASE_URL}/checkout/preferences`, {
     method: 'POST',
@@ -216,33 +248,10 @@ const fetchPayment = async (paymentId: string) => {
   return (await response.json()) as MercadoPagoPayment;
 };
 
-export const handleMercadoPagoWebhook = async (
-  payload: MercadoPagoWebhookPayload,
-  reqMeta: { rawBody?: string; headers: Record<string, string | string[] | undefined> }
-) => {
-  const eventType = payload.type || payload.topic || '';
-  const dataId = payload.data?.id || payload.id;
-  if (!dataId) {
-    return { ok: true, ignored: true };
-  }
-
-  if (!verifyMercadoPagoSignature(reqMeta, String(dataId))) {
-    return { ok: false, message: 'Firma invalida.' };
-  }
-
-  if (eventType !== 'payment') {
-    return { ok: true, ignored: true };
-  }
-
-  const payment = await fetchPayment(String(dataId));
-  const purchaseId = payment.external_reference;
-  if (!purchaseId) {
-    return { ok: true, ignored: true };
-  }
-
+const applyPaymentToPurchase = async (purchaseId: string, payment: MercadoPagoPayment) => {
   const purchase = await prisma.purchaseRequest.findUnique({ where: { purchaseId } });
   if (!purchase) {
-    return { ok: true, ignored: true };
+    return { ok: true, approved: false, ignored: true };
   }
 
   if (payment.status === 'approved') {
@@ -309,4 +318,47 @@ export const handleMercadoPagoWebhook = async (
   });
 
   return { ok: true, approved: false };
+};
+
+export const handleMercadoPagoWebhook = async (
+  payload: MercadoPagoWebhookPayload,
+  reqMeta: { rawBody?: string; headers: Record<string, string | string[] | undefined> }
+) => {
+  const eventType = payload.type || payload.topic || '';
+  const dataId = payload.data?.id || payload.id;
+  if (!dataId) {
+    return { ok: true, ignored: true };
+  }
+
+  if (!verifyMercadoPagoSignature(reqMeta, String(dataId))) {
+    return { ok: false, message: 'Firma invalida.' };
+  }
+
+  if (eventType !== 'payment') {
+    return { ok: true, ignored: true };
+  }
+
+  const payment = await fetchPayment(String(dataId));
+  const purchaseId = payment.external_reference;
+  if (!purchaseId) {
+    return { ok: true, ignored: true };
+  }
+  return applyPaymentToPurchase(purchaseId, payment);
+};
+
+export const confirmMercadoPagoPayment = async (paymentId: string, auth?: AuthContext) => {
+  const payment = await fetchPayment(paymentId);
+  const purchaseId = payment.external_reference;
+  if (!purchaseId) {
+    throw new Error('Pago sin referencia de compra.');
+  }
+
+  if (auth?.userType === AuthUserType.SHOP && auth.shopId) {
+    const purchase = await prisma.purchaseRequest.findUnique({ where: { purchaseId } });
+    if (!purchase || purchase.shopId !== auth.shopId) {
+      throw new Error('Compra no encontrada para esta tienda.');
+    }
+  }
+
+  return applyPaymentToPurchase(purchaseId, payment);
 };

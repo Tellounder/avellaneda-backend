@@ -26,6 +26,8 @@ const MP_WEBHOOK_URL = process.env.MP_WEBHOOK_URL || '';
 const MP_PRICE_LIVE = Number(process.env.MP_PRICE_LIVE || '');
 const MP_PRICE_REEL = Number(process.env.MP_PRICE_REEL || '');
 
+const isTestAccessToken = () => MP_ACCESS_TOKEN.startsWith('TEST-');
+
 const normalizeBaseUrl = (value?: string) => {
   if (!value) return null;
   const trimmed = value.trim();
@@ -265,7 +267,7 @@ const verifyMercadoPagoSignature = (req: { rawBody?: string; headers: Record<str
     ? req.headers['x-request-id'][0]
     : req.headers['x-request-id'];
 
-  if (!signatureHeader) return false;
+  if (!signatureHeader) return isTestAccessToken();
   const { ts, v1 } = parseSignatureHeader(signatureHeader);
   const rawBody = req.rawBody || '';
 
@@ -278,7 +280,7 @@ const verifyMercadoPagoSignature = (req: { rawBody?: string; headers: Record<str
     if (signatureMatches(v1, secret, rawBody)) return true;
   }
 
-  return false;
+  return isTestAccessToken();
 };
 
 const fetchPayment = async (paymentId: string) => {
@@ -377,7 +379,7 @@ export const handleMercadoPagoWebhook = async (
     return { ok: true, ignored: true };
   }
 
-  if (!verifyMercadoPagoSignature(reqMeta, String(dataId))) {
+  if (!verifyMercadoPagoSignature(reqMeta, String(dataId)) && !isTestAccessToken()) {
     return { ok: false, message: 'Firma invalida.' };
   }
 

@@ -28,7 +28,41 @@ const MP_PRICE_REEL = Number(process.env.MP_PRICE_REEL || '');
 
 const normalizeBaseUrl = (value?: string) => {
   if (!value) return null;
-  return value.replace(/\/+$/, '');
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed);
+  const candidate = hasScheme ? trimmed : `http://${trimmed}`;
+  try {
+    const url = new URL(candidate);
+    return url.origin.replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+};
+
+const getPreferenceReuseWindowMs = () => {
+  const minutes = Number(process.env.MP_PREFERENCE_TTL_MINUTES || 5);
+  return Math.max(minutes, 1) * 60 * 1000;
+};
+
+const findRecentPreference = async (
+  shopId: string,
+  type: PurchaseType,
+  quantity: number
+) => {
+  const since = new Date(Date.now() - getPreferenceReuseWindowMs());
+  return prisma.purchaseRequest.findFirst({
+    where: {
+      shopId,
+      type,
+      quantity,
+      status: PurchaseStatus.PENDING,
+      paymentProvider: 'MERCADOPAGO',
+      createdAt: { gte: since },
+      paymentPreferenceId: { not: null },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
 };
 
 const getUnitPrice = (type: PurchaseType) => {
@@ -94,25 +128,38 @@ export const createMercadoPagoPreference = async ({
   requireAccessToken();
 
   const unitPrice = assertPricingConfigured(type);
+
+  const requestReturnUrl = normalizeBaseUrl(returnUrl);
+  const envReturnUrl = normalizeBaseUrl(
+    process.env.MP_RETURN_URL ||
+      process.env.FRONTEND_URL ||
+      process.env.APP_BASE_URL
+  );
+  const baseReturnUrl = requestReturnUrl || envReturnUrl;
+  if (!baseReturnUrl) {
+    throw new Error('Return URL no configurada.');
+  }
+
+  const reused = await findRecentPreference(shopId, type, Number(quantity));
+  if (reused?.paymentPreferenceId) {
+    return {
+      purchaseId: reused.purchaseId,
+      preferenceId: reused.paymentPreferenceId,
+      initPoint: undefined,
+      sandboxInitPoint: undefined,
+    };
+  }
+
   const purchase = await createPurchaseRequest(shopId, type, quantity);
 
   const itemTitle =
     type === PurchaseType.LIVE_PACK ? 'Cupos de vivos' : 'Cupos de reels';
 
-  const baseReturnUrl = normalizeBaseUrl(
-    returnUrl ||
-      process.env.MP_RETURN_URL ||
-      process.env.FRONTEND_URL ||
-      process.env.APP_BASE_URL
-  );
-
-  const backUrls = baseReturnUrl
-    ? {
-        success: `${baseReturnUrl}/tienda?mp_result=success`,
-        pending: `${baseReturnUrl}/tienda?mp_result=pending`,
-        failure: `${baseReturnUrl}/tienda?mp_result=failure`,
-      }
-    : undefined;
+  const backUrls = {
+    success: `${baseReturnUrl}/tienda?mp_result=success`,
+    pending: `${baseReturnUrl}/tienda?mp_result=pending`,
+    failure: `${baseReturnUrl}/tienda?mp_result=failure`,
+  };
 
   const preferencePayload: Record<string, unknown> = {
     items: [
@@ -132,10 +179,8 @@ export const createMercadoPagoPreference = async ({
     payer: payerEmail ? { email: payerEmail } : undefined,
     notification_url: MP_WEBHOOK_URL || undefined,
   };
-  if (backUrls) {
-    preferencePayload.back_urls = backUrls;
-    preferencePayload.auto_return = 'approved';
-  }
+  preferencePayload.back_urls = backUrls;
+  preferencePayload.auto_return = 'approved';
 
   const response = await fetch(`${MP_BASE_URL}/checkout/preferences`, {
     method: 'POST',
@@ -151,6 +196,8 @@ export const createMercadoPagoPreference = async ({
     await prisma.purchaseRequest.update({
       where: { purchaseId: purchase.purchaseId },
       data: {
+        status: PurchaseStatus.REJECTED,
+        paymentStatus: 'ERROR',
         notes: `Mercado Pago error: ${errorPayload?.message || response.status}`,
       },
     });

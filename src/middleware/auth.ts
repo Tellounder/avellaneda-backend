@@ -29,7 +29,7 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
     return next();
   } catch (error) {
     req.auth = null;
-    return res.status(401).json({ message: 'Token invalido o expirado.' });
+    return next();
   }
 };
 

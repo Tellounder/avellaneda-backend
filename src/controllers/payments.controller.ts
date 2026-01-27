@@ -83,11 +83,12 @@ export const confirmMercadoPagoPayment = async (req: Request, res: Response) => 
     }
 
     const paymentId = String(req.body?.paymentId || req.query?.paymentId || '').trim();
-    if (!paymentId) {
-      return res.status(400).json({ message: 'paymentId requerido.' });
+    const purchaseId = String(req.body?.purchaseId || req.query?.purchaseId || '').trim();
+    if (!paymentId && !purchaseId) {
+      return res.status(400).json({ message: 'paymentId o purchaseId requerido.' });
     }
 
-    const result = await PaymentsService.confirmMercadoPagoPayment(paymentId, req.auth);
+    const result = await PaymentsService.confirmMercadoPagoPayment({ paymentId, purchaseId }, req.auth);
     return res.json(result);
   } catch (error: any) {
     return res.status(400).json({ message: error.message || 'Error al confirmar pago.' });

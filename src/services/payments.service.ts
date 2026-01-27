@@ -237,6 +237,10 @@ type MercadoPagoPayment = {
   external_reference?: string;
 };
 
+type MercadoPagoSearchResponse = {
+  results?: Array<{ id?: number | string }>;
+};
+
 const signatureMatches = (signature: string, secret: string, payload: string) => {
   const normalized = signature.trim();
   if (!/^[0-9a-f]+$/i.test(normalized)) {
@@ -295,6 +299,29 @@ const fetchPayment = async (paymentId: string) => {
     throw new Error('No se pudo obtener el pago.');
   }
   return (await response.json()) as MercadoPagoPayment;
+};
+
+const fetchLatestPaymentByPurchaseId = async (purchaseId: string) => {
+  requireAccessToken();
+  const url =
+    `${MP_BASE_URL}/v1/payments/search?` +
+    `external_reference=${encodeURIComponent(purchaseId)}` +
+    `&sort=date_created&criteria=desc&limit=1`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  if (!response.ok) {
+    throw new Error('No se pudo buscar el pago.');
+  }
+  const payload = (await response.json()) as MercadoPagoSearchResponse;
+  const latestId = payload?.results?.[0]?.id;
+  if (!latestId) {
+    throw new Error('No se encontro un pago para esta compra.');
+  }
+  return fetchPayment(String(latestId));
 };
 
 const applyPaymentToPurchase = async (purchaseId: string, payment: MercadoPagoPayment) => {
@@ -395,9 +422,19 @@ export const handleMercadoPagoWebhook = async (
   return applyPaymentToPurchase(purchaseId, payment);
 };
 
-export const confirmMercadoPagoPayment = async (paymentId: string, auth?: AuthContext) => {
-  const payment = await fetchPayment(paymentId);
-  const purchaseId = payment.external_reference;
+export const confirmMercadoPagoPayment = async (
+  params: { paymentId?: string; purchaseId?: string },
+  auth?: AuthContext
+) => {
+  const payment = params.paymentId
+    ? await fetchPayment(params.paymentId)
+    : params.purchaseId
+      ? await fetchLatestPaymentByPurchaseId(params.purchaseId)
+      : (() => {
+          throw new Error('paymentId o purchaseId requerido.');
+        })();
+
+  const purchaseId = payment.external_reference || params.purchaseId;
   if (!purchaseId) {
     throw new Error('Pago sin referencia de compra.');
   }

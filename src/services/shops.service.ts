@@ -231,43 +231,45 @@ export const getShopsMapData = async () => {
   });
 };
 
-export const getShops = async () => {
+export const getShops = async (options?: { limit?: number; offset?: number }) => {
+  const rawLimit = Number(options?.limit);
+  const rawOffset = Number(options?.offset);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : undefined;
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
+
+  const shouldHydrateWallets = !options || offset === 0;
+  if (shouldHydrateWallets) {
+    const missingWallet = await prisma.shop.findMany({
+      where: { quotaWallet: null },
+      select: {
+        id: true,
+        plan: true,
+        streamQuota: true,
+        reelQuota: true,
+      },
+    });
+
+    for (const shop of missingWallet) {
+      await createQuotaWalletFromLegacy(
+        {
+          id: shop.id,
+          plan: shop.plan,
+          streamQuota: shop.streamQuota,
+          reelQuota: shop.reelQuota,
+        },
+        prisma
+      );
+    }
+  }
+
+  const pagination = limit ? { take: limit, skip: offset } : {};
   const shops = await prisma.shop.findMany({
     orderBy: { name: 'asc' },
     include: shopInclude,
-  });
-
-  const missingWallet = shops.filter((shop) => !shop.quotaWallet);
-  if (missingWallet.length === 0) {
-    const ratings = await getShopRatingsMap();
-    return shops.map((shop) => {
-      const rating = ratings.get(shop.id);
-      return {
-        ...shop,
-        ratingAverage: rating?.avg ?? 0,
-        ratingCount: rating?.count ?? 0,
-      };
-    });
-  }
-
-  for (const shop of missingWallet) {
-    await createQuotaWalletFromLegacy(
-      {
-        id: shop.id,
-        plan: shop.plan,
-        streamQuota: shop.streamQuota,
-        reelQuota: shop.reelQuota,
-      },
-      prisma
-    );
-  }
-
-  const hydrated = await prisma.shop.findMany({
-    orderBy: { name: 'asc' },
-    include: shopInclude,
+    ...pagination,
   });
   const ratings = await getShopRatingsMap();
-  return hydrated.map((shop) => {
+  return shops.map((shop) => {
     const rating = ratings.get(shop.id);
     return {
       ...shop,

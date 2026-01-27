@@ -31,7 +31,9 @@ const sanitizeShopPayload = (payload: any, req: Request) => {
 
 export const getShops = async (req: Request, res: Response) => {
   try {
-    const data = await ShopsService.getShops();
+    const limit = Number(req.query?.limit);
+    const offset = Number(req.query?.offset);
+    const data = await ShopsService.getShops({ limit, offset });
     res.json(sanitizeShopPayload(data, req));
   } catch (error) {
     res.status(500).json({ message: 'Error al obtener tiendas', error });

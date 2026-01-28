@@ -1,0 +1,14 @@
+-- CreateEnum
+CREATE TYPE "ReelType" AS ENUM ('VIDEO', 'PHOTO_SET');
+
+-- CreateEnum
+CREATE TYPE "ReelStatus" AS ENUM ('ACTIVE', 'EXPIRED', 'HIDDEN');
+
+-- AlterTable
+ALTER TABLE "Reel" ADD COLUMN     "durationSeconds" INTEGER NOT NULL DEFAULT 10,
+ADD COLUMN     "expiresAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN     "photoUrls" TEXT[] DEFAULT ARRAY[]::TEXT[],
+ADD COLUMN     "status" "ReelStatus" NOT NULL DEFAULT 'ACTIVE',
+ADD COLUMN     "thumbnailUrl" TEXT,
+ADD COLUMN     "type" "ReelType" NOT NULL DEFAULT 'VIDEO',
+ALTER COLUMN "videoUrl" DROP NOT NULL;

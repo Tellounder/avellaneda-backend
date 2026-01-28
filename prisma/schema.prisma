@@ -5,6 +5,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum SocialPlatform {
@@ -144,6 +145,18 @@ enum NotificationStatus {
   SENT
   FAILED
   CANCELED
+}
+
+enum ReelType {
+  VIDEO
+  PHOTO_SET
+}
+
+enum ReelStatus {
+  ACTIVE
+  PROCESSING
+  EXPIRED
+  HIDDEN
 }
 
 model AuthUser {
@@ -303,11 +316,18 @@ model Reel {
   id        String   @id @default(uuid())
   shopId    String
   shop      Shop     @relation(fields: [shopId], references: [id])
-  url       String         @map("videoUrl")
+  type      ReelType   @default(VIDEO)
+  videoUrl  String?    @map("videoUrl")
+  photoUrls String[] @default([])
+  thumbnailUrl String?
+  durationSeconds Int @default(10)
+  status    ReelStatus @default(ACTIVE)
+  processingJobId String? @unique
   platform  SocialPlatform @default(Instagram)
   hidden    Boolean  @default(false)
   views     Int      @default(0)
   createdAt DateTime @default(now())
+  expiresAt DateTime @default(now())
   reelViews ReelView[]
 }
 

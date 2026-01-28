@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "src/app/server.ts",
   "scripts": {
-    "start": "ts-node src/app/server.ts",
+    "start": "npx prisma generate && ts-node src/app/server.ts",
     "dev": "ts-node-dev --respawn --transpile-only src/app/server.ts",
     "backfill:authusers": "ts-node scripts/backfill-authusers.ts",
     "backfill:quotawallets": "ts-node scripts/backfill-quotawallets.ts",

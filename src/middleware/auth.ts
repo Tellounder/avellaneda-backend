@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { firebaseAuth, firebaseReady } from '../lib/firebaseAdmin';
-import { resolveAuthContext } from '../services/auth.service';
+import { resolveAuthContext } from '../domains/auth/service';
 
 export const optionalAuth = async (req: Request, res: Response, next: NextFunction) => {
   const header = req.headers.authorization || '';

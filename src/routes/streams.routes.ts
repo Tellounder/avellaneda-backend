@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import * as StreamsController from '../controllers/streams.controller';
+import * as StreamsController from '../domains/streams/controller';
 import { requireAdmin, requireAuth, requireShopOrAdmin } from '../middleware/auth';
 
 const router = Router();
@@ -23,3 +23,4 @@ router.post('/:id/cancel', requireAuth, StreamsController.cancelStream);
 router.post('/:id/ban', requireAdmin, StreamsController.banStream);
 
 export default router;
+

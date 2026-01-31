@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import * as NotificationsController from '../controllers/notifications.controller';
+import * as NotificationsController from '../domains/notifications/controller';
 import { requireAdmin, requireAuth } from '../middleware/auth';
 
 const router = Router();
@@ -11,3 +11,4 @@ router.post('/:userId/read-all', requireAuth, NotificationsController.markAllAsR
 router.post('/:id/read', requireAuth, NotificationsController.markAsRead);
 
 export default router;
+

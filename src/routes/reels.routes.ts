@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import * as ReelsController from '../controllers/reels.controller';
+import * as ReelsController from '../domains/reels/controller';
 import { requireAdmin, requireAuth, requireShopOrAdmin } from '../middleware/auth';
 
 const router = Router();
@@ -13,3 +13,4 @@ router.post('/:id/reactivate', requireAdmin, ReelsController.reactivateReel);
 router.post('/:id/view', requireAuth, ReelsController.registerView);
 
 export default router;
+

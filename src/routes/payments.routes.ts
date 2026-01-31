@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import * as PaymentsController from '../controllers/payments.controller';
+import * as PaymentsController from '../domains/payments/controller';
 import { requireAuth } from '../middleware/auth';
 
 const router = Router();
@@ -9,3 +9,4 @@ router.post('/mercadopago/confirm', requireAuth, PaymentsController.confirmMerca
 router.post('/mercadopago/webhook', PaymentsController.mercadoPagoWebhook);
 
 export default router;
+

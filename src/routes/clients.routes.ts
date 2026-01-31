@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import * as ClientsController from '../controllers/clients.controller';
+import * as ClientsController from '../domains/clients/controller';
 import { requireAuth } from '../middleware/auth';
 
 const router = Router();
@@ -14,3 +14,4 @@ router.post('/me/reminders/:streamId', requireAuth, ClientsController.addReminde
 router.delete('/me/reminders/:streamId', requireAuth, ClientsController.removeReminder);
 
 export default router;
+

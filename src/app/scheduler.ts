@@ -1,6 +1,6 @@
-import { runReminderNotifications } from '../services/notifications.service';
+import { runReminderNotifications } from '../domains/notifications/service';
 import { runSanctionsEngine } from '../services/sanctions.service';
-import { runStreamLifecycle } from '../services/streams.service';
+import { runStreamLifecycle } from '../domains/streams/service';
 
 const parseBool = (value?: string) => value === 'true' || value === '1';
 

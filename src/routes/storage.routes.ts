@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 import multer from 'multer';
-import * as StorageController from '../controllers/storage.controller';
+import * as StorageController from '../domains/storage/controller';
 
 const router = Router();
 const uploadDir = path.join(os.tmpdir(), 'avellaneda-reels-upload');
@@ -17,3 +17,4 @@ router.post('/reels/upload-url', StorageController.createReelUploadUrls);
 router.post('/reels/upload', upload.array('files', 5), StorageController.uploadReelMedia);
 
 export default router;
+

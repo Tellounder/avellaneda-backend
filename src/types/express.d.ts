@@ -1,4 +1,4 @@
-import { AuthContext } from '../services/auth.service';
+import { AuthContext } from '../domains/auth/service';
 
 declare global {
   namespace Express {

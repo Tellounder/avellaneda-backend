@@ -12,6 +12,17 @@ const FALLBACK_JSON_PATH = '/home/analia/Escritorio/datos_convertidos .json';
 const normalizeEmail = (value: unknown) => String(value || '').trim().toLowerCase();
 const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
+const DM_CATALOG_HOSTS = ['distritomoda.com.ar', 'distritomoda.com'];
+
+const normalizeUrlForCompare = (value: string) =>
+  value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/g, '');
+
+const isDmCatalogUrl = (value: string) => {
+  const normalized = normalizeUrlForCompare(value);
+  if (!normalized) return false;
+  return DM_CATALOG_HOSTS.some((host) => normalized.includes(host));
+};
+
 const slugify = (value: string) =>
   value
     .normalize('NFD')
@@ -66,12 +77,48 @@ const resolveCoverUrl = (row: RawShop) => {
   return null;
 };
 
-const resolveWebsiteUrl = (row: RawShop) => {
-  const raw = row['url_tienda'] ?? row['url_catalogo'] ?? '';
+const sanitizeWebsite = (value: string, catalogUrl?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const normalized = normalizeUrlForCompare(raw);
+  if (!normalized) return null;
+  if (isDmCatalogUrl(raw)) return null;
+  if (catalogUrl) {
+    const catalogNormalized = normalizeUrlForCompare(catalogUrl);
+    if (catalogNormalized && normalized === catalogNormalized) return null;
+  }
+  return raw;
+};
+
+const resolveCatalogUrl = (row: RawShop) => {
+  const raw =
+    row['url_catalogo'] ??
+    row['URL Catalogo'] ??
+    row['Catalogo'] ??
+    row['catalogo'] ??
+    '';
+  const value = String(raw || '').trim();
+  if (value) {
+    if (isImageUrl(value)) return null;
+    return value;
+  }
+  const fallback = String(row['url_tienda'] ?? '').trim();
+  if (fallback && isDmCatalogUrl(fallback)) return fallback;
+  return null;
+};
+
+const resolveWebsiteUrl = (row: RawShop, catalogUrl?: string | null) => {
+  const raw =
+    row['url_tienda'] ??
+    row['web'] ??
+    row['Web'] ??
+    row['Sitio web'] ??
+    row['website'] ??
+    '';
   const value = String(raw || '').trim();
   if (!value) return null;
   if (isImageUrl(value)) return null;
-  return value;
+  return sanitizeWebsite(value, catalogUrl);
 };
 
 const resolveInstagramHandle = (row: RawShop) => {
@@ -219,7 +266,11 @@ const run = async () => {
     const status = isActive ? ShopStatus.ACTIVE : ShopStatus.HIDDEN;
     const logoUrl = resolveLogoUrl(row);
     const coverUrl = resolveCoverUrl(row);
-    const websiteUrl = resolveWebsiteUrl(row);
+    const catalogUrl = resolveCatalogUrl(row);
+    if (catalogUrl) {
+      (details as Record<string, unknown>).catalogUrl = catalogUrl;
+    }
+    const websiteUrl = resolveWebsiteUrl(row, catalogUrl);
     const instagramHandle = resolveInstagramHandle(row);
 
     const existing = existingByEmail.get(email);
@@ -244,7 +295,7 @@ const run = async () => {
             address: address || undefined,
             addressDetails: details,
             minimumPurchase,
-            plan: 'BASIC',
+            plan: 'ESTANDAR',
             status,
             active: isActive,
             whatsappLines: whatsapp
@@ -256,7 +307,7 @@ const run = async () => {
 
         if (!skipWallet && !existing.quotaWallet) {
           await createQuotaWalletFromLegacy(
-            { id: existing.id, plan: 'BASIC', streamQuota: existing.streamQuota, reelQuota: existing.reelQuota },
+            { id: existing.id, plan: 'ESTANDAR', streamQuota: existing.streamQuota, reelQuota: existing.reelQuota },
             prisma
           );
         }
@@ -284,7 +335,7 @@ const run = async () => {
         addressDetails: details,
         minimumPurchase,
         paymentMethods: [],
-        plan: 'BASIC',
+        plan: 'ESTANDAR',
         status,
         statusChangedAt: new Date(),
         active: isActive,

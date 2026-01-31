@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import * as PurchasesController from '../controllers/purchases.controller';
+import * as PurchasesController from '../domains/purchases/controller';
 import { requireAdmin, requireShopOrAdmin } from '../middleware/auth';
 
 const router = Router();
@@ -10,3 +10,4 @@ router.post('/:id/approve', requireAdmin, PurchasesController.approvePurchase);
 router.post('/:id/reject', requireAdmin, PurchasesController.rejectPurchase);
 
 export default router;
+

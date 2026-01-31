@@ -183,6 +183,38 @@ export const createQuotaWalletFromLegacy = async (
   return computed.extraBalances;
 };
 
+export const syncQuotaWalletToPlan = async (
+  shopId: string,
+  plan: string | null,
+  client: PrismaClientLike = prisma
+) => {
+  const limits = resolvePlanLimits(plan);
+  const wallet = await client.quotaWallet.findUnique({ where: { shopId } });
+  if (!wallet) {
+    const shop = await client.shop.findUnique({
+      where: { id: shopId },
+      select: { id: true, plan: true, streamQuota: true, reelQuota: true },
+    });
+    if (shop) {
+      await createQuotaWalletFromLegacy(shop, client, new Date());
+    }
+    return null;
+  }
+
+  const nextWeeklyUsed = Math.min(wallet.weeklyLiveUsed, limits.weeklyLiveBaseLimit);
+  const nextReelUsed = Math.min(wallet.reelDailyUsed, limits.reelDailyLimit);
+
+  return client.quotaWallet.update({
+    where: { shopId },
+    data: {
+      weeklyLiveBaseLimit: limits.weeklyLiveBaseLimit,
+      weeklyLiveUsed: nextWeeklyUsed,
+      reelDailyLimit: limits.reelDailyLimit,
+      reelDailyUsed: nextReelUsed,
+    },
+  });
+};
+
 export const getLiveQuotaSnapshot = async (
   shopId: string,
   scheduledAt: Date,

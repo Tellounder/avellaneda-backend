@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import * as ShopsController from '../controllers/shops.controller';
+import * as ShopsController from '../domains/shops/controller';
 import { requireAdmin, requireShopOrAdmin } from '../middleware/auth';
 
 const router = Router();
@@ -26,3 +26,4 @@ router.post('/:id/lift-suspension', requireAdmin, ShopsController.liftAgendaSusp
 router.post('/:id/reset-password', requireAdmin, ShopsController.resetShopPassword);
 
 export default router;
+

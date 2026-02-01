@@ -17,6 +17,7 @@ import clientsRoutes from '../routes/clients.routes';
 import systemRoutes from '../routes/system.routes';
 import paymentsRoutes from '../routes/payments.routes';
 import storageRoutes from '../routes/storage.routes';
+import shareRoutes from '../routes/share.routes';
 import { optionalAuth } from '../middleware/auth';
 
 const app = express();
@@ -65,5 +66,6 @@ app.use('/clients', clientsRoutes);
 app.use('/system', systemRoutes);
 app.use('/payments', paymentsRoutes);
 app.use('/storage', storageRoutes);
+app.use('/share', shareRoutes);
 
 export default app;

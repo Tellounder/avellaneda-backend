@@ -62,9 +62,8 @@ const buildShareHtml = (params: {
         `<meta property="og:video:height" content="1280" />`,
       ].join('\n')
     : '';
-  const expiredBanner = params.isExpired
-    ? '<p style="margin:0;color:#a00;font-weight:600;">Este reel ya expiro.</p>'
-    : '';
+  const redirectUrl = params.isExpired ? shareUrl : appUrl;
+  const refreshSeconds = params.isExpired ? 0 : 0;
 
   return `<!doctype html>
 <html lang="es">
@@ -80,28 +79,14 @@ const buildShareHtml = (params: {
     ${imageMeta}
     ${videoMeta}
     <meta name="twitter:card" content="${params.videoUrl ? 'player' : 'summary_large_image'}" />
+    <meta http-equiv="refresh" content="${refreshSeconds};url=${redirectUrl}" />
     <title>${title}</title>
-    <style>
-      body { font-family: Arial, sans-serif; background:#0b0b0b; color:#fff; margin:0; padding:32px; }
-      .card { max-width:520px; margin:0 auto; background:#111; border-radius:16px; padding:24px; }
-      .cta { display:inline-block; margin-top:16px; padding:12px 18px; background:#ff2b6e; color:#fff; text-decoration:none; border-radius:999px; font-weight:600; }
-      .muted { opacity:0.75; font-size:14px; margin-top:8px; }
-    </style>
   </head>
   <body>
-    <div class="card">
-      <h1 style="margin:0 0 8px 0; font-size:20px;">${title}</h1>
-      <p style="margin:0 0 8px 0;">${description}</p>
-      ${expiredBanner}
-      <a class="cta" href="${appUrl}">Abrir en Avellaneda en Vivo</a>
-      <div class="muted">Si no se abre automaticamente, toca el boton.</div>
-    </div>
     <script>
-      setTimeout(function () {
-        if (${params.isExpired ? 'false' : 'true'}) {
-          window.location.href = "${appUrl}";
-        }
-      }, 700);
+      if (${params.isExpired ? 'false' : 'true'}) {
+        window.location.replace("${appUrl}");
+      }
     </script>
   </body>
 </html>`;

@@ -86,7 +86,6 @@ const countValidatedReports = async (
     where: {
       streamId,
       status: ReportStatus.VALIDATED,
-      userId: { not: null },
       createdAt: { gte: validFrom },
     },
   });

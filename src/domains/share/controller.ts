@@ -11,7 +11,24 @@ const escapeHtml = (value: string) =>
     .replace(/'/g, '&#39;');
 
 const buildOgDescription = (shopName: string) =>
-  `🔥 ${shopName} en Avellaneda en Vivo. Miralo antes de que expire. Nota: este reel estara activo por 24 hs.`;
+  `${shopName} en Avellaneda en Vivo. Miralo antes de que expire. Nota: este reel estara activo por 24 hs.`;
+
+const normalizeOgUrl = (value?: string | null, baseUrl?: string | null) => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('/') && baseUrl) return `${baseUrl}${trimmed}`;
+  return trimmed;
+};
+
+const guessImageType = (value?: string | null) => {
+  const lower = (value || '').toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  return 'image/jpeg';
+};
 
 const buildShareHtml = (params: {
   title: string;
@@ -26,10 +43,20 @@ const buildShareHtml = (params: {
   const description = escapeHtml(params.description);
   const shareUrl = escapeHtml(params.shareUrl);
   const appUrl = escapeHtml(params.appUrl);
-  const imageMeta = params.imageUrl ? `<meta property="og:image" content="${escapeHtml(params.imageUrl)}" />` : '';
+  const imageMeta = params.imageUrl
+    ? [
+        `<meta property="og:image" content="${escapeHtml(params.imageUrl)}" />`,
+        `<meta property="og:image:secure_url" content="${escapeHtml(params.imageUrl)}" />`,
+        `<meta property="og:image:type" content="${guessImageType(params.imageUrl)}" />`,
+        `<meta property="og:image:width" content="1080" />`,
+        `<meta property="og:image:height" content="1920" />`,
+        `<meta property="og:image:alt" content="${title}" />`,
+      ].join('\n')
+    : '';
   const videoMeta = params.videoUrl
     ? [
         `<meta property="og:video" content="${escapeHtml(params.videoUrl)}" />`,
+        `<meta property="og:video:secure_url" content="${escapeHtml(params.videoUrl)}" />`,
         `<meta property="og:video:type" content="video/mp4" />`,
         `<meta property="og:video:width" content="720" />`,
         `<meta property="og:video:height" content="1280" />`,
@@ -46,6 +73,7 @@ const buildShareHtml = (params: {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex,nofollow" />
     <meta property="og:type" content="${params.videoUrl ? 'video.other' : 'website'}" />
+    <meta property="og:site_name" content="Avellaneda en Vivo" />
     <meta property="og:title" content="${title}" />
     <meta property="og:description" content="${description}" />
     <meta property="og:url" content="${shareUrl}" />
@@ -106,9 +134,15 @@ export const getReelSharePage = async (req: Request, res: Response) => {
   const title = `${shopName} en Avellaneda en Vivo`;
   const description = buildOgDescription(shopName);
   const photoUrl = Array.isArray(reel.photoUrls) ? reel.photoUrls[0] : null;
-  const imageUrl = reel.thumbnailUrl || photoUrl || reel.shop?.logoUrl || null;
+  const baseForAssets = appBaseUrl || requestBaseUrl;
+  const imageUrl = normalizeOgUrl(
+    reel.thumbnailUrl || photoUrl || reel.shop?.logoUrl || null,
+    baseForAssets
+  );
   const videoUrl =
-    reel.type === ReelType.VIDEO && reel.videoUrl && !isExpired ? reel.videoUrl : null;
+    reel.type === ReelType.VIDEO && reel.videoUrl && !isExpired
+      ? normalizeOgUrl(reel.videoUrl, baseForAssets)
+      : null;
 
   const html = buildShareHtml({
     title,

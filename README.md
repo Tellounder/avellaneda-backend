@@ -1,6 +1,6 @@
 # Avellaneda en Vivo - Backend
 
-API de negocio para el ecosistema de live shopping mayorista. Centraliza reglas, estados, cupos, sanciones y auditoria.
+API de negocio para el ecosistema de live shopping mayorista. Centraliza reglas, estados, cupos, sanciones, auditoria y compartidos (OG share).
 
 ## Que es / como funciona
 - **Auth**: Firebase Admin valida el token y determina el rol.
@@ -29,6 +29,7 @@ FIREBASE_CLIENT_EMAIL=...
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 ADMIN_EMAILS=admin1@gmail.com,admin2@gmail.com
 CORS_ORIGINS=http://localhost:5173,https://avellaneda-en-vivo.web.app
+APP_URL=https://avellaneda-en-vivo.web.app
 NODE_ENV=production
 ```
 Opcionales:
@@ -58,9 +59,10 @@ SANCTIONS_CRON_MINUTES=30
 - `POST /streams` / `PUT /streams/:id` - vivos
 - `GET /reels` / `POST /reels` - reels
 - `GET /reports` - reportes (admin)
+- `GET /share/reels/:id` - preview/OG y redirect al front (`?reelId=...`)
 
 ## Estructura
 - `src/routes` -> rutas
-- `src/controllers` -> controladores
-- `src/services` -> reglas de negocio
+- `src/domains` -> controllers + services por dominio
+- `src/services` -> reglas de negocio compartidas
 - `prisma/schema.prisma` -> modelo de datos

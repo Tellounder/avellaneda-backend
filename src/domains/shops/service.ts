@@ -15,8 +15,9 @@ import prisma from './repo';
 import { getShopRatingsMap } from '../../services/ratings.service';
 import { computeAgendaSuspended, createQuotaWalletFromLegacy, creditLiveExtra, creditReelExtra } from '../../services/quota.service';
 import { notifyAdmins } from '../notifications/service';
-import { firebaseAuth } from '../../lib/firebaseAdmin';
+import { firebaseAuth, firebaseReady } from '../../lib/firebaseAdmin';
 import { resolvePlanTier } from './plan';
+import { buildShopInviteEmail, sendEmail } from '../../services/email.service';
 
 type SocialHandleInput = { platform?: string; handle?: string };
 type WhatsappLineInput = { label?: string; number?: string };
@@ -75,6 +76,21 @@ const normalizeEmail = (value: unknown) => String(value || '').trim().toLowerCas
 const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
 const buildTechnicalEmail = (shopId: string) => `shop_${shopId}@${TECH_EMAIL_DOMAIN}`;
+
+const ensureFirebaseUser = async (email: string) => {
+  if (!firebaseReady || !firebaseAuth) {
+    throw new Error('Firebase Admin no configurado.');
+  }
+  try {
+    await firebaseAuth.getUserByEmail(email);
+  } catch (error: any) {
+    if (error?.code === 'auth/user-not-found') {
+      await firebaseAuth.createUser({ email });
+      return;
+    }
+    throw error;
+  }
+};
 
 export const isShopEmail = async (email: string) => {
   const normalizedEmail = normalizeEmail(email);
@@ -398,7 +414,7 @@ export const createShop = async (data: any) => {
 
   const passwordHash = hashPassword(data.password);
 
-  return prisma.$transaction(async (tx) => {
+  const createdShop = await prisma.$transaction(async (tx) => {
     const authUser = await tx.authUser.create({
       data: {
         email: authEmail,
@@ -454,6 +470,22 @@ export const createShop = async (data: any) => {
 
     return createdShop;
   });
+
+  if (normalizedEmail && isValidEmail(normalizedEmail) && !requiresEmailFix && process.env.RESEND_API_KEY) {
+    try {
+      await ensureFirebaseUser(normalizedEmail);
+      const inviteLink = await firebaseAuth!.generatePasswordResetLink(normalizedEmail);
+      const { subject, html, text } = buildShopInviteEmail({
+        shopName: createdShop.name,
+        inviteLink,
+      });
+      await sendEmail({ to: normalizedEmail, subject, html, text });
+    } catch (error) {
+      console.error('Error enviando invitacion de tienda:', error);
+    }
+  }
+
+  return createdShop;
 };
 
 export const updateShop = async (id: string, data: any) => {

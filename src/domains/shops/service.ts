@@ -576,19 +576,8 @@ export const updateShop = async (id: string, data: any) => {
 };
 
 export const acceptShop = async (id: string, authUserId: string) => {
-  const shop = await prisma.shop.findUnique({ where: { id } });
-  if (!shop) {
-    throw new Error('Tienda no encontrada.');
-  }
-  if (shop.authUserId && shop.authUserId !== authUserId) {
-    throw new Error('Acceso denegado.');
-  }
-
-  const updated = await prisma.shop.update({
+  const shop = await prisma.shop.findUnique({
     where: { id },
-    data: {
-      ownerAcceptedAt: shop.ownerAcceptedAt || new Date(),
-    },
     include: {
       socialHandles: true,
       whatsappLines: true,
@@ -596,11 +585,80 @@ export const acceptShop = async (id: string, authUserId: string) => {
       quotaWallet: true,
     },
   });
+  if (!shop) {
+    throw new Error('Tienda no encontrada.');
+  }
+  if (shop.authUserId && shop.authUserId !== authUserId) {
+    throw new Error('Acceso denegado.');
+  }
 
-  await notifyAdmins(`La tienda ${updated.name} confirmo sus datos.`, {
-    type: NotificationType.SYSTEM,
-    refId: updated.id,
+  const details = (shop.addressDetails || {}) as Record<string, unknown>;
+  const hasIdentity =
+    String(shop.name || '').trim().length > 0 &&
+    String(shop.razonSocial || '').trim().length > 0 &&
+    String(shop.cuit || '').trim().length > 0;
+  const hasAddress =
+    String(details.street || '').trim().length > 0 &&
+    String(details.number || '').trim().length > 0 &&
+    String(details.city || '').trim().length > 0 &&
+    String(details.province || '').trim().length > 0 &&
+    String(details.zip || '').trim().length > 0;
+  const hasSales =
+    Number(shop.minimumPurchase ?? 0) > 0 &&
+    Array.isArray(shop.paymentMethods) &&
+    shop.paymentMethods.length > 0;
+  const hasValidEmail = !shop.requiresEmailFix && isValidEmail(shop.email || '');
+  const hasActivePenalty = (shop.penalties || []).some((penalty) => penalty.active);
+  const canAutoApprove =
+    shop.status === ShopStatus.PENDING_VERIFICATION &&
+    shop.active !== false &&
+    hasValidEmail &&
+    hasIdentity &&
+    hasAddress &&
+    hasSales &&
+    !hasActivePenalty;
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const updatedShop = await tx.shop.update({
+      where: { id },
+      data: {
+        ownerAcceptedAt: shop.ownerAcceptedAt || new Date(),
+        ...(canAutoApprove
+          ? {
+              status: ShopStatus.ACTIVE,
+              statusReason: null,
+              statusChangedAt: new Date(),
+              active: true,
+              agendaSuspendedUntil: null,
+              agendaSuspendedByAdminId: null,
+              agendaSuspendedReason: null,
+            }
+          : {}),
+      },
+      include: {
+        socialHandles: true,
+        whatsappLines: true,
+        penalties: true,
+        quotaWallet: true,
+      },
+    });
+
+    if (canAutoApprove) {
+      await syncAuthUserStatus(updatedShop.authUserId, updatedShop.status, updatedShop.active, tx);
+    }
+
+    return updatedShop;
   });
+
+  await notifyAdmins(
+    canAutoApprove
+      ? `La tienda ${updated.name} confirmo sus datos y fue autoaprobada.`
+      : `La tienda ${updated.name} confirmo sus datos. Pendiente de revision.`,
+    {
+      type: NotificationType.SYSTEM,
+      refId: updated.id,
+    }
+  );
 
   return updated;
 };
@@ -787,6 +845,7 @@ export const activateShop = async (id: string, reason?: string) => {
         status: ShopStatus.ACTIVE,
         statusReason: reason || null,
         statusChangedAt: new Date(),
+        active: true,
         agendaSuspendedUntil: null,
         agendaSuspendedByAdminId: null,
         agendaSuspendedReason: null,

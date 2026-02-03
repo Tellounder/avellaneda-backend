@@ -24,6 +24,7 @@ router.post('/:id/reject', requireAdmin, ShopsController.rejectShop);
 router.post('/:id/suspend-agenda', requireAdmin, ShopsController.suspendAgenda);
 router.post('/:id/lift-suspension', requireAdmin, ShopsController.liftAgendaSuspension);
 router.post('/:id/reset-password', requireAdmin, ShopsController.resetShopPassword);
+router.post('/:id/send-invite', requireAdmin, ShopsController.sendShopInvite);
 
 export default router;
 

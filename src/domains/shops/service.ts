@@ -931,6 +931,32 @@ export const resetShopPassword = async (id: string) => {
   return { resetLink };
 };
 
+export const sendShopInvite = async (id: string) => {
+  const shop = await prisma.shop.findUnique({
+    where: { id },
+    select: { id: true, name: true, email: true, requiresEmailFix: true },
+  });
+  if (!shop) {
+    throw new Error('Tienda no encontrada.');
+  }
+  const email = normalizeEmail(shop.email);
+  if (!email || !isValidEmail(email)) {
+    throw new Error('Email invalido para enviar invitacion.');
+  }
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error('RESEND_API_KEY no configurado.');
+  }
+  await ensureFirebaseUser(email);
+  const inviteLink = await firebaseAuth!.generatePasswordResetLink(email);
+  const { subject, html, text } = buildShopInviteEmail({ shopName: shop.name, inviteLink });
+  await sendEmail({ to: email, subject, html, text });
+  await prisma.shop.update({
+    where: { id: shop.id },
+    data: { requiresEmailFix: false },
+  });
+  return { sent: true };
+};
+
 export const deleteShop = async (id: string) => {
   return prisma.$transaction(async (tx) => {
     const existing = await tx.shop.findUnique({ where: { id }, select: { id: true } });

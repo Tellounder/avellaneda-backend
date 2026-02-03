@@ -162,6 +162,15 @@ export const resetShopPassword = async (req: Request, res: Response) => {
   }
 };
 
+export const sendShopInvite = async (req: Request, res: Response) => {
+  try {
+    const data = await ShopsService.sendShopInvite(req.params.id);
+    res.json(data);
+  } catch (error: any) {
+    res.status(400).json({ message: error.message || 'Error al enviar invitacion', error });
+  }
+};
+
 export const deleteShop = async (req: Request, res: Response) => {
   try {
     const data = await ShopsService.deleteShop(req.params.id);

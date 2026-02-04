@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import fs from 'fs/promises';
 
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -67,4 +68,39 @@ export const createSignedUploadUrls = async (
   }
 
   return { bucket: reelsBucket, uploads };
+};
+
+export const uploadShopImage = async ({
+  shopId,
+  type,
+  file,
+}: {
+  shopId: string;
+  type: 'LOGO' | 'COVER';
+  file: Express.Multer.File;
+}) => {
+  assertSupabaseConfigured();
+  if (!shopId) {
+    throw new Error('shopId requerido.');
+  }
+  if (!file) {
+    throw new Error('Archivo requerido.');
+  }
+
+  const key = type === 'COVER' ? 'cover' : 'logo';
+  const filePath = `shops/${shopId}/${key}`;
+  const buffer = await fs.readFile(file.path);
+
+  const { error } = await supabase.storage.from(reelsBucket).upload(filePath, buffer, {
+    contentType: file.mimetype || 'image/jpeg',
+    cacheControl: '3600',
+    upsert: true,
+  });
+
+  if (error) {
+    throw new Error(error.message || 'No se pudo subir la imagen.');
+  }
+
+  const { data } = supabase.storage.from(reelsBucket).getPublicUrl(filePath);
+  return data.publicUrl;
 };

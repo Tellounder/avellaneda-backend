@@ -15,6 +15,7 @@ const upload = multer({
 
 router.post('/reels/upload-url', StorageController.createReelUploadUrls);
 router.post('/reels/upload', upload.array('files', 5), StorageController.uploadReelMedia);
+router.post('/shops/upload', upload.single('file'), StorageController.uploadShopImage);
 
 export default router;
 

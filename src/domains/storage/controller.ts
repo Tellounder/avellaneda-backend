@@ -1,6 +1,8 @@
 ﻿import { Request, Response } from 'express';
-import { createSignedUploadUrls } from './service';
+import fs from 'fs/promises';
+import { createSignedUploadUrls, uploadShopImage as uploadShopImageToStorage } from './service';
 import { processReelUpload, enqueueReelVideoJob } from '../../services/reelsMedia.service';
+import { updateShop } from '../shops/service';
 
 const isImage = (type: string) => type.startsWith('image/');
 const isVideo = (type: string) => type.startsWith('video/');
@@ -114,6 +116,48 @@ export const uploadReelMedia = async (req: Request, res: Response) => {
     res.json(payload);
   } catch (error: any) {
     res.status(400).json({ message: error?.message || 'No se pudo procesar el reel.' });
+  }
+};
+
+export const uploadShopImage = async (req: Request, res: Response) => {
+  if (!req.auth) {
+    return res.status(401).json({ message: 'Autenticacion requerida.' });
+  }
+  const { shopId, type } = req.body || {};
+  const normalizedType = type === 'COVER' ? 'COVER' : 'LOGO';
+  if (req.auth.userType !== 'SHOP' && req.auth.userType !== 'ADMIN') {
+    return res.status(403).json({ message: 'Permisos insuficientes.' });
+  }
+  const effectiveShopId = req.auth.userType === 'SHOP' ? req.auth.shopId : shopId;
+  if (!effectiveShopId) {
+    return res.status(400).json({ message: 'shopId requerido.' });
+  }
+
+  const file = Array.isArray(req.files) ? req.files[0] : req.file;
+  if (!file) {
+    return res.status(400).json({ message: 'Archivo requerido.' });
+  }
+  if (!isImage(file.mimetype || '')) {
+    return res.status(400).json({ message: 'La imagen debe ser formato válido.' });
+  }
+
+  try {
+    const publicUrl = await uploadShopImageToStorage({
+      shopId: effectiveShopId,
+      type: normalizedType,
+      file: file as Express.Multer.File,
+    });
+    const cacheBustedUrl = `${publicUrl}?v=${Date.now()}`;
+    const updatedShop = await updateShop(effectiveShopId, {
+      [normalizedType === 'COVER' ? 'coverUrl' : 'logoUrl']: cacheBustedUrl,
+    });
+    res.json({ url: cacheBustedUrl, shop: updatedShop });
+  } catch (error: any) {
+    res.status(400).json({ message: error?.message || 'No se pudo subir la imagen.' });
+  } finally {
+    if (file?.path) {
+      await fs.unlink(file.path).catch(() => undefined);
+    }
   }
 };
 

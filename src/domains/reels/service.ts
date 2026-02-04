@@ -47,6 +47,13 @@ export const getReelsByShop = async (shopId: string) => {
   });
 };
 
+export const getReelById = async (id: string) => {
+  return prisma.reel.findUnique({
+    where: { id },
+    include: { shop: true },
+  });
+};
+
 type CreateReelInput = {
   shopId: string;
   type: ReelType;
@@ -54,6 +61,7 @@ type CreateReelInput = {
   videoUrl?: string | null;
   photoUrls?: string[];
   thumbnailUrl?: string | null;
+  presetLabel?: string | null;
   durationSeconds?: number;
   status?: ReelStatus;
   processingJobId?: string | null;
@@ -79,6 +87,8 @@ export const createReel = async (
   const durationSeconds = clampDuration(input.durationSeconds, 10);
   let status = input.status ?? ReelStatus.ACTIVE;
   let thumbnailUrl = input.thumbnailUrl || null;
+  const presetLabelRaw = input.presetLabel?.trim() || '';
+  const presetLabel = presetLabelRaw ? presetLabelRaw.slice(0, 48) : null;
 
   if (status === ReelStatus.PROCESSING && input.processingJobId) {
     const processed = consumeCompletedJob(input.processingJobId);
@@ -114,6 +124,7 @@ export const createReel = async (
           videoUrl,
           photoUrls,
           thumbnailUrl,
+          presetLabel,
           durationSeconds,
           status,
           expiresAt,
@@ -164,6 +175,16 @@ export const reactivateReel = async (id: string) => {
     where: { id },
     data: { hidden: false, status: ReelStatus.ACTIVE },
     include: { shop: true },
+  });
+};
+
+export const deleteReel = async (id: string) => {
+  return prisma.$transaction(async (tx) => {
+    await tx.reelView.deleteMany({ where: { reelId: id } });
+    return tx.reel.delete({
+      where: { id },
+      include: { shop: true },
+    });
   });
 };
 

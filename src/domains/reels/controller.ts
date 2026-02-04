@@ -36,6 +36,26 @@ const sanitizeReelPayload = (payload: any, req: Request) => {
   return sanitizeOne(payload);
 };
 
+const resolveReelAccess = async (req: Request, res: Response) => {
+  if (!req.auth) {
+    res.status(401).json({ message: 'Autenticacion requerida.' });
+    return null;
+  }
+  const reel = await ReelsService.getReelById(req.params.id);
+  if (!reel) {
+    res.status(404).json({ message: 'Reel no encontrado.' });
+    return null;
+  }
+  if (req.auth.userType === 'ADMIN') {
+    return reel;
+  }
+  if (req.auth.userType === 'SHOP' && req.auth.shopId === reel.shopId) {
+    return reel;
+  }
+  res.status(403).json({ message: 'Acceso denegado.' });
+  return null;
+};
+
 export const getActiveReels = async (req: Request, res: Response) => {
   const data = await ReelsService.getActiveReels();
   res.json(sanitizeReelPayload(data, req));
@@ -61,7 +81,7 @@ export const createReel = async (req: Request, res: Response) => {
   if (req.auth.userType !== 'SHOP' && req.auth.userType !== 'ADMIN') {
     return res.status(403).json({ message: 'Permisos insuficientes.' });
   }
-  const { shopId, type, videoUrl, photoUrls, thumbnailUrl, durationSeconds, platform, status, processingJobId } = req.body;
+  const { shopId, type, videoUrl, photoUrls, thumbnailUrl, durationSeconds, platform, status, processingJobId, presetLabel } = req.body;
   const isAdminOverride =
     req.auth.userType === 'ADMIN' ? Boolean(req.body?.isAdminOverride ?? true) : false;
   const data = await ReelsService.createReel(
@@ -72,6 +92,7 @@ export const createReel = async (req: Request, res: Response) => {
       videoUrl,
       photoUrls,
       thumbnailUrl,
+      presetLabel,
       durationSeconds,
       status,
       processingJobId,
@@ -82,12 +103,21 @@ export const createReel = async (req: Request, res: Response) => {
 };
 
 export const hideReel = async (req: Request, res: Response) => {
-  const data = await ReelsService.hideReel(req.params.id);
+  const reel = await resolveReelAccess(req, res);
+  if (!reel) return;
+  const data = await ReelsService.hideReel(reel.id);
   res.json(sanitizeReelPayload(data, req));
 };
 
 export const reactivateReel = async (req: Request, res: Response) => {
   const data = await ReelsService.reactivateReel(req.params.id);
+  res.json(sanitizeReelPayload(data, req));
+};
+
+export const deleteReel = async (req: Request, res: Response) => {
+  const reel = await resolveReelAccess(req, res);
+  if (!reel) return;
+  const data = await ReelsService.deleteReel(reel.id);
   res.json(sanitizeReelPayload(data, req));
 };
 

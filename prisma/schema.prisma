@@ -320,6 +320,7 @@ model Reel {
   videoUrl  String?    @map("videoUrl")
   photoUrls String[] @default([])
   thumbnailUrl String?
+  presetLabel String?
   durationSeconds Int @default(10)
   status    ReelStatus @default(ACTIVE)
   processingJobId String? @unique

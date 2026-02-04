@@ -82,7 +82,14 @@ export const createShop = async (req: Request, res: Response) => {
 
 export const updateShop = async (req: Request, res: Response) => {
   try {
-    const data = await ShopsService.updateShop(req.params.id, req.body);
+    const payload =
+      req.auth?.userType === 'SHOP'
+        ? (() => {
+            const { name, razonSocial, ...rest } = req.body || {};
+            return rest;
+          })()
+        : req.body;
+    const data = await ShopsService.updateShop(req.params.id, payload);
     res.json(sanitizeShopPayload(data, req));
   } catch (error) {
     res.status(500).json({ message: 'Error al actualizar tienda', error });

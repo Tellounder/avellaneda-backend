@@ -201,16 +201,27 @@ const buildSocialHandles = (input: unknown) => {
   return [];
 };
 
+const isValidWhatsappNumber = (value: string) => /^\+[1-9]\d{7,14}$/.test(value.trim());
+
 const buildWhatsappLines = (input: unknown) => {
   if (!Array.isArray(input)) return [];
-  return (input as WhatsappLineInput[])
+  let hasInvalid = false;
+  const lines = (input as WhatsappLineInput[])
     .map((item) => {
       const label = String(item.label || '').trim();
       const number = String(item.number || '').trim();
       if (!label || !number) return null;
+      if (!isValidWhatsappNumber(number)) {
+        hasInvalid = true;
+        return null;
+      }
       return { label, number };
     })
     .filter(Boolean) as { label: string; number: string }[];
+  if (hasInvalid) {
+    throw new Error('WhatsApp invalido. Usa formato internacional. Ejemplo: +541122334455');
+  }
+  return lines;
 };
 
 const shopInclude = {
@@ -396,6 +407,20 @@ export const createShop = async (data: any) => {
   const active = data.active !== undefined ? Boolean(data.active) : true;
   const shopId = data.id || randomUUID();
   const normalizedEmail = normalizeEmail(data.email);
+  const planTier = resolvePlanTier(data.plan || 'ESTANDAR');
+  const planDefaults = planTier === 'maxima'
+    ? { streamQuota: 3, reelQuota: 5 }
+    : planTier === 'alta'
+      ? { streamQuota: 1, reelQuota: 3 }
+      : { streamQuota: 0, reelQuota: 1 };
+  const parsedStreamQuota = Number(data.streamQuota);
+  const parsedReelQuota = Number(data.reelQuota);
+  const streamQuota = Number.isFinite(parsedStreamQuota) && parsedStreamQuota > 0
+    ? parsedStreamQuota
+    : planDefaults.streamQuota;
+  const reelQuota = Number.isFinite(parsedReelQuota) && parsedReelQuota > 0
+    ? parsedReelQuota
+    : planDefaults.reelQuota;
   const coverUrl = String(data.coverUrl || '').trim();
   const catalogUrl =
     data?.addressDetails?.catalogUrl ?? data?.catalogUrl ?? data?.addressDetails?.url_catalogo;
@@ -461,8 +486,8 @@ export const createShop = async (data: any) => {
         plan: data.plan || 'ESTANDAR',
         status,
         statusChangedAt: new Date(),
-        streamQuota: data.streamQuota || 0,
-        reelQuota: data.reelQuota || 0,
+        streamQuota,
+        reelQuota,
         active,
         ...(socialHandles.length > 0 ? { socialHandles: { create: socialHandles } } : {}),
         ...(whatsappLines.length > 0 ? { whatsappLines: { create: whatsappLines.slice(0, whatsappLimit) } } : {}),

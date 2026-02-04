@@ -10,8 +10,10 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-const buildOgDescription = (shopName: string) =>
-  `${shopName} en Avellaneda en Vivo. Miralo antes de que expire. Nota: este reel estara activo por 24 hs.`;
+const buildOgDescription = (shopName: string, presetLabel?: string | null) => {
+  const presetLine = presetLabel ? ` ${presetLabel}.` : '';
+  return `${shopName} en Avellaneda en Vivo.${presetLine} Miralo antes de que expire. Nota: este reel estara activo por 24 hs.`;
+};
 
 const normalizeOgUrl = (value?: string | null, baseUrl?: string | null) => {
   if (!value) return null;
@@ -117,7 +119,7 @@ export const getReelSharePage = async (req: Request, res: Response) => {
 
   const shopName = reel.shop?.name || 'Tienda';
   const title = `${shopName} en Avellaneda en Vivo`;
-  const description = buildOgDescription(shopName);
+  const description = buildOgDescription(shopName, reel.presetLabel);
   const photoUrl = Array.isArray(reel.photoUrls) ? reel.photoUrls[0] : null;
   const baseForAssets = appBaseUrl || requestBaseUrl;
   const imageUrl = normalizeOgUrl(

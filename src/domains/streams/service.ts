@@ -36,11 +36,42 @@ const resolveHidden = (data: any) => {
   return false;
 };
 
-const getDayRange = (date: Date) => {
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(date);
-  end.setHours(23, 59, 59, 999);
+const getTimeZoneOffset = (date: Date, timeZone: string) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value || 0);
+  const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return (asUtc - date.getTime()) / 60000;
+};
+
+const getZonedDate = (year: number, month: number, day: number, timeZone: string, hour = 0, minute = 0, second = 0) => {
+  const utc = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  const offsetMinutes = getTimeZoneOffset(utc, timeZone);
+  return new Date(utc.getTime() - offsetMinutes * 60 * 1000);
+};
+
+const getDayRange = (date: Date, timeZone = 'America/Argentina/Buenos_Aires') => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value || 0);
+  const year = get('year');
+  const month = get('month');
+  const day = get('day');
+  const start = getZonedDate(year, month, day, timeZone, 0, 0, 0);
+  const end = getZonedDate(year, month, day, timeZone, 23, 59, 59);
+  end.setMilliseconds(999);
   return { start, end };
 };
 

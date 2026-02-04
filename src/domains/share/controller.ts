@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { ReelStatus, ReelType } from '@prisma/client';
-import { getReelShareData } from './service';
+import { ReelStatus, ReelType, StreamStatus } from '@prisma/client';
+import { getReelShareData, getStreamShareData } from './service';
 
 const escapeHtml = (value: string) =>
   value
@@ -13,6 +13,11 @@ const escapeHtml = (value: string) =>
 const buildOgDescription = (shopName: string, presetLabel?: string | null) => {
   const presetLine = presetLabel ? ` ${presetLabel}.` : '';
   return `${shopName} en Avellaneda en Vivo.${presetLine} Miralo antes de que expire. Nota: este reel estara activo por 24 hs.`;
+};
+
+const buildStreamOgDescription = (shopName: string, title?: string | null) => {
+  const titleLine = title ? ` ${title}.` : '';
+  return `Mira el vivo de ${shopName} en Avellaneda en Vivo.${titleLine} Sumate ahora.`;
 };
 
 const normalizeOgUrl = (value?: string | null, baseUrl?: string | null) => {
@@ -139,6 +144,46 @@ export const getReelSharePage = async (req: Request, res: Response) => {
     imageUrl,
     videoUrl,
     isExpired,
+  });
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+};
+
+export const getStreamSharePage = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const stream = await getStreamShareData(id);
+  if (!stream) {
+    res.status(404).send('Vivo no encontrado');
+    return;
+  }
+
+  const requestBaseUrl = `${req.protocol}://${req.get('host')}`;
+  const shareUrl = `${requestBaseUrl}/share/streams/${stream.id}`;
+  const appBaseUrl =
+    process.env.APP_URL ||
+    process.env.FRONTEND_URL ||
+    process.env.PUBLIC_APP_URL ||
+    requestBaseUrl;
+  const appUrl = `${appBaseUrl}/en-vivo/${stream.id}`;
+
+  const shopName = stream.shop?.name || 'Tienda';
+  const title = stream.title ? `${stream.title} — ${shopName}` : `${shopName} en vivo`;
+  const description = buildStreamOgDescription(shopName, stream.title);
+  const baseForAssets = appBaseUrl || requestBaseUrl;
+  const isLive = stream.status === StreamStatus.LIVE;
+  const imageCandidate = isLive
+    ? stream.shop?.logoUrl
+    : stream.shop?.coverUrl || stream.shop?.logoUrl;
+  const imageUrl = normalizeOgUrl(imageCandidate || null, baseForAssets);
+
+  const html = buildShareHtml({
+    title,
+    description,
+    shareUrl,
+    appUrl,
+    imageUrl,
+    isExpired: false,
   });
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');

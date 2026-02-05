@@ -306,7 +306,9 @@ export const getShopsMapData = async () => {
 export const getShops = async (options?: { limit?: number; offset?: number }) => {
   const rawLimit = Number(options?.limit);
   const rawOffset = Number(options?.offset);
-  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : undefined;
+  const maxLimit = Number(process.env.SHOPS_MAX_LIMIT || 40);
+  const safeMax = Number.isFinite(maxLimit) && maxLimit > 0 ? maxLimit : 40;
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, safeMax) : safeMax;
   const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
 
   const shouldHydrateWallets = !options || offset === 0;
@@ -334,7 +336,7 @@ export const getShops = async (options?: { limit?: number; offset?: number }) =>
     }
   }
 
-  const pagination = limit ? { take: limit, skip: offset } : {};
+  const pagination = { take: limit, skip: offset };
   const shops = await prisma.shop.findMany({
     orderBy: { name: 'asc' },
     include: shopInclude,

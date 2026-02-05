@@ -19,6 +19,8 @@ import paymentsRoutes from '../routes/payments.routes';
 import storageRoutes from '../routes/storage.routes';
 import shareRoutes from '../routes/share.routes';
 import { optionalAuth } from '../middleware/auth';
+import { cacheMiddleware } from '../middleware/cache';
+import { rateLimit } from '../middleware/rateLimit';
 
 const app = express();
 
@@ -49,11 +51,32 @@ app.use(
   })
 );
 app.use(morgan('dev'));
+app.set('trust proxy', 1);
+app.use(rateLimit());
 app.use(optionalAuth);
 
-app.use('/streams', streamsRoutes);
-app.use('/reels', reelsRoutes);
-app.use('/shops', shopsRoutes);
+const cacheShops = cacheMiddleware({
+  ttlMs: 30_000,
+  publicOnly: true,
+  keyPrefix: 'shops:',
+  shouldCache: (req) => req.path === '/' || req.path === '/map-data',
+});
+const cacheStreams = cacheMiddleware({
+  ttlMs: 20_000,
+  publicOnly: true,
+  keyPrefix: 'streams:',
+  shouldCache: (req) => req.path === '/',
+});
+const cacheReels = cacheMiddleware({
+  ttlMs: 20_000,
+  publicOnly: true,
+  keyPrefix: 'reels:',
+  shouldCache: (req) => req.path === '/',
+});
+
+app.use('/streams', cacheStreams, streamsRoutes);
+app.use('/reels', cacheReels, reelsRoutes);
+app.use('/shops', cacheShops, shopsRoutes);
 app.use('/reviews', reviewsRoutes);
 app.use('/reports', reportsRoutes);
 app.use('/penalties', penaltiesRoutes);

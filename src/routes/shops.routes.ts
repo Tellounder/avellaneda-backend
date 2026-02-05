@@ -10,6 +10,8 @@ router.post('/', requireAdmin, ShopsController.createShop);
 
 router.get('/', ShopsController.getShops);
 router.get('/map-data', ShopsController.getShopsMapData);
+router.get('/featured', ShopsController.getFeaturedShops);
+router.get('/by-letter', ShopsController.getShopsByLetter);
 router.get('/check-email', ShopsController.checkShopEmail);
 router.get('/:id', ShopsController.getShopById);
 router.delete('/:id', requireAdmin, ShopsController.deleteShop);
@@ -27,4 +29,3 @@ router.post('/:id/reset-password', requireAdmin, ShopsController.resetShopPasswo
 router.post('/:id/send-invite', requireAdmin, ShopsController.sendShopInvite);
 
 export default router;
-

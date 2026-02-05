@@ -10,7 +10,7 @@ import {
   ShopStatus,
   StreamStatus,
 } from '@prisma/client';
-import { randomBytes, randomUUID, scryptSync } from 'crypto';
+import { createHash, randomBytes, randomUUID, scryptSync } from 'crypto';
 import prisma from './repo';
 import { getShopRatingsMap } from '../../services/ratings.service';
 import { computeAgendaSuspended, createQuotaWalletFromLegacy, creditLiveExtra, creditReelExtra } from '../../services/quota.service';
@@ -231,6 +231,33 @@ const shopInclude = {
   quotaWallet: true,
 };
 
+const shopPublicInclude = {
+  socialHandles: true,
+  whatsappLines: true,
+};
+
+const FEATURED_TIME_ZONE = 'America/Argentina/Buenos_Aires';
+
+const getHourlySeed = (date: Date, timeZone = FEATURED_TIME_ZONE) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+  return `${get('year')}-${get('month')}-${get('day')}-${get('hour')}`;
+};
+
+const hashToOffset = (seed: string, total: number) => {
+  if (total <= 0) return 0;
+  const hash = createHash('sha256').update(seed).digest('hex');
+  const bucket = Number.parseInt(hash.slice(0, 8), 16);
+  return bucket % total;
+};
+
 const toMapString = (value: unknown) => {
   if (value === null || value === undefined) return '';
   const text = String(value).trim();
@@ -311,31 +338,6 @@ export const getShops = async (options?: { limit?: number; offset?: number }) =>
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, safeMax) : safeMax;
   const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
 
-  const shouldHydrateWallets = !options || offset === 0;
-  if (shouldHydrateWallets) {
-    const missingWallet = await prisma.shop.findMany({
-      where: { quotaWallet: null },
-      select: {
-        id: true,
-        plan: true,
-        streamQuota: true,
-        reelQuota: true,
-      },
-    });
-
-    for (const shop of missingWallet) {
-      await createQuotaWalletFromLegacy(
-        {
-          id: shop.id,
-          plan: shop.plan,
-          streamQuota: shop.streamQuota,
-          reelQuota: shop.reelQuota,
-        },
-        prisma
-      );
-    }
-  }
-
   const pagination = { take: limit, skip: offset };
   const shops = await prisma.shop.findMany({
     orderBy: { name: 'asc' },
@@ -344,6 +346,139 @@ export const getShops = async (options?: { limit?: number; offset?: number }) =>
   });
   const ratings = await getShopRatingsMap();
   return shops.map((shop) => {
+    const rating = ratings.get(shop.id);
+    return {
+      ...shop,
+      ratingAverage: rating?.avg ?? 0,
+      ratingCount: rating?.count ?? 0,
+    };
+  });
+};
+
+export const getPublicShops = async (options?: { limit?: number; offset?: number }) => {
+  const rawLimit = Number(options?.limit);
+  const rawOffset = Number(options?.offset);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : undefined;
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
+  const pagination = limit ? { take: limit, skip: offset } : {};
+  const shops = await prisma.shop.findMany({
+    where: {
+      active: true,
+      status: ShopStatus.ACTIVE,
+    },
+    orderBy: { name: 'asc' },
+    include: shopPublicInclude,
+    ...pagination,
+  });
+  const ratings = await getShopRatingsMap();
+  return shops.map((shop) => {
+    const rating = ratings.get(shop.id);
+    return {
+      ...shop,
+      ratingAverage: rating?.avg ?? 0,
+      ratingCount: rating?.count ?? 0,
+    };
+  });
+};
+
+const normalizeInitialLetter = (raw: string) => {
+  const cleaned = raw.trim().toUpperCase();
+  if (!cleaned) return '';
+  const letter = cleaned[0];
+  if (letter < 'A' || letter > 'Z') return '';
+  return letter;
+};
+
+export const getPublicShopsByLetter = async (
+  letter: string,
+  options?: { limit?: number; offset?: number }
+) => {
+  const initial = normalizeInitialLetter(letter);
+  if (!initial) return [];
+  const rawLimit = Number(options?.limit);
+  const rawOffset = Number(options?.offset);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : undefined;
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
+  const take = limit ? limit + 1 : undefined;
+  const shops = await prisma.shop.findMany({
+    where: {
+      active: true,
+      status: ShopStatus.ACTIVE,
+      name: {
+        startsWith: initial,
+        mode: 'insensitive',
+      },
+    },
+    orderBy: { name: 'asc' },
+    include: shopPublicInclude,
+    ...(take ? { take, skip: offset } : {}),
+  });
+  const hasMore = limit ? shops.length > limit : false;
+  const items = limit ? shops.slice(0, limit) : shops;
+  const ratings = await getShopRatingsMap();
+  const mapped = items.map((shop) => {
+    const rating = ratings.get(shop.id);
+    return {
+      ...shop,
+      ratingAverage: rating?.avg ?? 0,
+      ratingCount: rating?.count ?? 0,
+    };
+  });
+  if (!limit) return mapped;
+  return { items: mapped, hasMore };
+};
+
+export const getFeaturedShops = async (options?: { limit?: number; referenceDate?: Date }) => {
+  const rawLimit = Number(options?.limit);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 120) : 30;
+  const referenceDate = options?.referenceDate || new Date();
+  const where = {
+    active: true,
+    status: ShopStatus.ACTIVE,
+  };
+  const total = await prisma.shop.count({ where });
+  if (total === 0) return [];
+  if (total <= limit) {
+    const shops = await prisma.shop.findMany({
+      where,
+      orderBy: { name: 'asc' },
+      include: shopPublicInclude,
+    });
+    const ratings = await getShopRatingsMap();
+    return shops.map((shop) => {
+      const rating = ratings.get(shop.id);
+      return {
+        ...shop,
+        ratingAverage: rating?.avg ?? 0,
+        ratingCount: rating?.count ?? 0,
+      };
+    });
+  }
+
+  const seed = getHourlySeed(referenceDate);
+  const offset = hashToOffset(seed, total);
+  const firstTake = Math.min(limit, total - offset);
+  const firstBatch = await prisma.shop.findMany({
+    where,
+    orderBy: { name: 'asc' },
+    skip: offset,
+    take: firstTake,
+    include: shopPublicInclude,
+  });
+  let featured = firstBatch;
+  if (featured.length < limit) {
+    const remaining = limit - featured.length;
+    const secondBatch = await prisma.shop.findMany({
+      where,
+      orderBy: { name: 'asc' },
+      skip: 0,
+      take: remaining,
+      include: shopPublicInclude,
+    });
+    featured = featured.concat(secondBatch);
+  }
+  const ratings = await getShopRatingsMap();
+  return featured.map((shop) => {
     const rating = ratings.get(shop.id);
     return {
       ...shop,
@@ -1093,5 +1228,3 @@ export const deleteShop = async (id: string) => {
     return tx.shop.delete({ where: { id } });
   });
 };
-
-

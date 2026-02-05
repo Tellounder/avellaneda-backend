@@ -1,5 +1,11 @@
 ﻿import { Request, Response } from 'express';
 import * as ShopsService from './service';
+import { getOrSetCache } from '../../utils/publicCache';
+
+const SHOPS_CACHE_MS = 30_000;
+const SHOPS_MAP_CACHE_MS = 120_000;
+const FEATURED_SHOPS_CACHE_MS = 60_000;
+const LETTER_SHOPS_CACHE_MS = 120_000;
 
 const stripShopPrivateFields = (shop: any) => {
   if (!shop) return shop;
@@ -35,14 +41,15 @@ const sanitizeShopPayload = (payload: any, req: Request) => {
 };
 
 export const getShops = async (req: Request, res: Response) => {
-  try {
-    const limit = Number(req.query?.limit);
-    const offset = Number(req.query?.offset);
-    const data = await ShopsService.getShops({ limit, offset });
-    res.json(sanitizeShopPayload(data, req));
-  } catch (error) {
-    res.status(500).json({ message: 'Error al obtener tiendas', error });
-  }
+  const limit = Number(req.query?.limit);
+  const offset = Number(req.query?.offset);
+  const includePrivate =
+    req.auth?.userType === 'ADMIN' || req.auth?.userType === 'SHOP';
+  const cacheKey = `shops:list:${includePrivate ? 'private' : 'public'}:${Number.isFinite(limit) ? limit : 'all'}:${Number.isFinite(offset) ? offset : 0}`;
+  const data = await getOrSetCache(cacheKey, SHOPS_CACHE_MS, () =>
+    includePrivate ? ShopsService.getShops({ limit, offset }) : ShopsService.getPublicShops({ limit, offset })
+  );
+  res.json(sanitizeShopPayload(data, req));
 };
 
 export const getShopById = async (req: Request, res: Response) => {
@@ -58,12 +65,38 @@ export const getShopById = async (req: Request, res: Response) => {
 };
 
 export const getShopsMapData = async (_req: Request, res: Response) => {
-  try {
-    const data = await ShopsService.getShopsMapData();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ message: 'Error al obtener mapa de tiendas', error });
+  const data = await getOrSetCache('shops:map-data', SHOPS_MAP_CACHE_MS, () => ShopsService.getShopsMapData());
+  res.json(data);
+};
+
+export const getFeaturedShops = async (req: Request, res: Response) => {
+  const limit = Number(req.query?.limit);
+  const cacheKey = `shops:featured:${Number.isFinite(limit) ? limit : 'default'}`;
+  const data = await getOrSetCache(cacheKey, FEATURED_SHOPS_CACHE_MS, () =>
+    ShopsService.getFeaturedShops({ limit })
+  );
+  res.json(sanitizeShopPayload(data, req));
+};
+
+export const getShopsByLetter = async (req: Request, res: Response) => {
+  const letter = String(req.query?.letter || '').trim().toUpperCase();
+  const limit = Number(req.query?.limit);
+  const offset = Number(req.query?.offset);
+  const cacheKey = `shops:letter:${letter || 'none'}:${Number.isFinite(limit) ? limit : 'all'}:${Number.isFinite(offset) ? offset : 0}`;
+  const data = await getOrSetCache(cacheKey, LETTER_SHOPS_CACHE_MS, () =>
+    ShopsService.getPublicShopsByLetter(letter, { limit, offset })
+  );
+  if (data && typeof data === 'object' && 'items' in (data as any)) {
+    const payload = data as { items: any[]; hasMore: boolean };
+    res.json({
+      items: sanitizeShopPayload(payload.items, req),
+      hasMore: payload.hasMore,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      offset: Number.isFinite(offset) ? offset : 0,
+    });
+    return;
   }
+  res.json(sanitizeShopPayload(data, req));
 };
 
 // --- NUEVA FUNCIÃ“N AGREGADA: El "Mozo" toma el pedido de crear tienda ---
@@ -217,4 +250,3 @@ export const checkShopEmail = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Error al validar email', error });
   }
 };
-

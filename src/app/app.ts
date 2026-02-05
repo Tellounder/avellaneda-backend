@@ -1,3 +1,4 @@
+import 'express-async-errors';
 import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
@@ -21,6 +22,7 @@ import shareRoutes from '../routes/share.routes';
 import { optionalAuth } from '../middleware/auth';
 import { cacheMiddleware } from '../middleware/cache';
 import { rateLimit } from '../middleware/rateLimit';
+import { errorHandler } from '../middleware/errorHandler';
 
 const app = express();
 
@@ -90,5 +92,7 @@ app.use('/system', systemRoutes);
 app.use('/payments', paymentsRoutes);
 app.use('/storage', storageRoutes);
 app.use('/share', shareRoutes);
+
+app.use(errorHandler);
 
 export default app;

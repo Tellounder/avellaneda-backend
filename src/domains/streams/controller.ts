@@ -1,6 +1,9 @@
 ﻿import { Request, Response } from 'express';
 import * as StreamsService from './service';
 import { getWhatsappLimit } from '../shops/service';
+import { getOrSetCache } from '../../utils/publicCache';
+
+const STREAMS_CACHE_MS = 15_000;
 
 const stripShopPrivateFields = (shop: any) => {
   if (!shop) return shop;
@@ -27,10 +30,12 @@ const applyWhatsappPrivacy = (shop: any, req: Request) => {
 const sanitizeStreamPayload = (payload: any, req: Request) => {
   if (!payload) return payload;
   const sanitizeOne = (stream: any) => {
-    if (stream?.shop) {
-      stream.shop = applyWhatsappPrivacy(stripShopPrivateFields(stream.shop), req);
+    if (!stream) return stream;
+    const next = { ...stream };
+    if (stream.shop) {
+      next.shop = applyWhatsappPrivacy(stripShopPrivateFields(stream.shop), req);
     }
-    return stream;
+    return next;
   };
   if (Array.isArray(payload)) return payload.map(sanitizeOne);
   return sanitizeOne(payload);
@@ -109,12 +114,8 @@ export const getStreamCalendar = async (req: Request, res: Response) => {
 };
 
 export const getStreams = async (req: Request, res: Response) => {
-  try {
-    const data = await StreamsService.getStreams();
-    res.json(sanitizeStreamPayload(data, req));
-  } catch (error) {
-    res.status(500).json({ message: 'Error al obtener vivos', error });
-  }
+  const data = await getOrSetCache('streams:all', STREAMS_CACHE_MS, () => StreamsService.getStreams());
+  res.json(sanitizeStreamPayload(data, req));
 };
 
 export const getStreamById = async (req: Request, res: Response) => {
@@ -295,4 +296,3 @@ export const runStreamLifecycle = async (_req: Request, res: Response) => {
     res.status(500).json({ message: 'Error al ejecutar ciclo de vivos', error });
   }
 };
-

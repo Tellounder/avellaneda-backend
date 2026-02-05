@@ -1,6 +1,9 @@
 ﻿import { Request, Response } from 'express';
 import * as ReelsService from './service';
 import { getWhatsappLimit } from '../shops/service';
+import { getOrSetCache } from '../../utils/publicCache';
+
+const REELS_CACHE_MS = 15_000;
 
 const stripShopPrivateFields = (shop: any) => {
   if (!shop) return shop;
@@ -27,10 +30,12 @@ const applyWhatsappPrivacy = (shop: any, req: Request) => {
 const sanitizeReelPayload = (payload: any, req: Request) => {
   if (!payload) return payload;
   const sanitizeOne = (reel: any) => {
-    if (reel?.shop) {
-      reel.shop = applyWhatsappPrivacy(stripShopPrivateFields(reel.shop), req);
+    if (!reel) return reel;
+    const next = { ...reel };
+    if (reel.shop) {
+      next.shop = applyWhatsappPrivacy(stripShopPrivateFields(reel.shop), req);
     }
-    return reel;
+    return next;
   };
   if (Array.isArray(payload)) return payload.map(sanitizeOne);
   return sanitizeOne(payload);
@@ -57,7 +62,7 @@ const resolveReelAccess = async (req: Request, res: Response) => {
 };
 
 export const getActiveReels = async (req: Request, res: Response) => {
-  const data = await ReelsService.getActiveReels();
+  const data = await getOrSetCache('reels:active', REELS_CACHE_MS, () => ReelsService.getActiveReels());
   res.json(sanitizeReelPayload(data, req));
 };
 
@@ -128,4 +133,3 @@ export const registerView = async (req: Request, res: Response) => {
   const data = await ReelsService.registerView(req.params.id, req.auth.authUserId);
   res.json(data);
 };
-

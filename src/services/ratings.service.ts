@@ -1,4 +1,7 @@
 import prisma from '../../prisma/client';
+import { getOrSetCache } from '../utils/publicCache';
+
+const RATINGS_CACHE_MS = 60_000;
 
 type RatingRow = {
   shopId: string;
@@ -7,32 +10,34 @@ type RatingRow = {
 };
 
 export const getShopRatingsMap = async () => {
-  const rows = (await prisma.shopAggregate.findMany({
-    select: { shopId: true, ratingAvg: true, ratingCount: true },
-  })) as RatingRow[];
+  return getOrSetCache('ratings:map', RATINGS_CACHE_MS, async () => {
+    const rows = (await prisma.shopAggregate.findMany({
+      select: { shopId: true, ratingAvg: true, ratingCount: true },
+    })) as RatingRow[];
 
-  const map = new Map<string, { avg: number; count: number }>();
-  rows.forEach((row) => {
-    map.set(row.shopId, {
-      avg: Number(row.ratingAvg) || 0,
-      count: Number(row.ratingCount) || 0,
-    });
-  });
-
-  const legacyRows = (await prisma.$queryRawUnsafe(
-    'SELECT s."shopId" as "shopId", AVG(r.rating)::float as "avg", COUNT(*)::int as "count" FROM "Review" r JOIN "Stream" s ON s.id = r."streamId" GROUP BY s."shopId"'
-  )) as { shopId: string; avg: number | string | null; count: number | string | null }[];
-
-  legacyRows.forEach((row) => {
-    if (!map.has(row.shopId)) {
+    const map = new Map<string, { avg: number; count: number }>();
+    rows.forEach((row) => {
       map.set(row.shopId, {
-        avg: Number(row.avg) || 0,
-        count: Number(row.count) || 0,
+        avg: Number(row.ratingAvg) || 0,
+        count: Number(row.ratingCount) || 0,
       });
-    }
-  });
+    });
 
-  return map;
+    const legacyRows = (await prisma.$queryRawUnsafe(
+      'SELECT s."shopId" as "shopId", AVG(r.rating)::float as "avg", COUNT(*)::int as "count" FROM "Review" r JOIN "Stream" s ON s.id = r."streamId" GROUP BY s."shopId"'
+    )) as { shopId: string; avg: number | string | null; count: number | string | null }[];
+
+    legacyRows.forEach((row) => {
+      if (!map.has(row.shopId)) {
+        map.set(row.shopId, {
+          avg: Number(row.avg) || 0,
+          count: Number(row.count) || 0,
+        });
+      }
+    });
+
+    return map;
+  });
 };
 
 export const updateShopAggregate = async (shopId: string) => {

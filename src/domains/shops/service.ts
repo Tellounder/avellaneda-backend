@@ -224,6 +224,7 @@ const buildWhatsappLines = (input: unknown) => {
   return lines;
 };
 
+
 const shopInclude = {
   socialHandles: true,
   whatsappLines: true,
@@ -231,13 +232,21 @@ const shopInclude = {
   quotaWallet: true,
 };
 
-<<<<<<< HEAD
 const shopPublicInclude = {
   socialHandles: true,
   whatsappLines: true,
 };
 
 const FEATURED_TIME_ZONE = 'America/Argentina/Buenos_Aires';
+const FEATURED_DEFAULT_LIMIT = Number(process.env.FEATURED_DEFAULT_LIMIT || 40);
+const FEATURED_MAX_LIMIT = Number(process.env.FEATURED_MAX_LIMIT || 60);
+const LETTER_DEFAULT_LIMIT = 33;
+const LETTER_MAX_LIMIT = Number(process.env.SHOPS_LETTER_MAX_LIMIT || 100);
+
+const clampLimit = (value: number, fallback: number, max: number) => {
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(value, max);
+};
 
 const getHourlySeed = (date: Date, timeZone = FEATURED_TIME_ZONE) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -257,29 +266,6 @@ const hashToOffset = (seed: string, total: number) => {
   const hash = createHash('sha256').update(seed).digest('hex');
   const bucket = Number.parseInt(hash.slice(0, 8), 16);
   return bucket % total;
-=======
-const FEATURED_DEFAULT_LIMIT = 40;
-const FEATURED_MAX_LIMIT = Number(process.env.FEATURED_MAX_LIMIT || 60);
-const LETTER_DEFAULT_LIMIT = 33;
-const LETTER_MAX_LIMIT = Number(process.env.SHOPS_LETTER_MAX_LIMIT || 100);
-
-const clampLimit = (value: number, fallback: number, max: number) => {
-  if (!Number.isFinite(value) || value <= 0) return fallback;
-  return Math.min(value, max);
-};
-
-const buildHourlySeed = () => {
-  const now = new Date();
-  return `${now.getUTCFullYear()}-${now.getUTCMonth() + 1}-${now.getUTCDate()}-${now.getUTCHours()}`;
-};
-
-const hashString = (value: string) => {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
-  }
-  return hash;
->>>>>>> ef587ba (feat: endpoints tiendas destacadas y directorio)
 };
 
 const toMapString = (value: unknown) => {
@@ -379,7 +365,7 @@ export const getShops = async (options?: { limit?: number; offset?: number }) =>
   });
 };
 
-<<<<<<< HEAD
+
 export const getPublicShops = async (options?: { limit?: number; offset?: number }) => {
   const rawLimit = Number(options?.limit);
   const rawOffset = Number(options?.offset);
@@ -394,27 +380,6 @@ export const getPublicShops = async (options?: { limit?: number; offset?: number
     orderBy: { name: 'asc' },
     include: shopPublicInclude,
     ...pagination,
-=======
-export const getFeaturedShops = async (options?: { limit?: number }) => {
-  const safeLimit = clampLimit(Number(options?.limit), FEATURED_DEFAULT_LIMIT, FEATURED_MAX_LIMIT);
-  const where = {
-    active: true,
-    status: ShopStatus.ACTIVE,
-  };
-  const total = await prisma.shop.count({ where });
-  if (!total) return [];
-
-  const maxOffset = Math.max(total - safeLimit, 0);
-  const seed = hashString(buildHourlySeed());
-  const offset = maxOffset > 0 ? seed % (maxOffset + 1) : 0;
-
-  const shops = await prisma.shop.findMany({
-    where,
-    orderBy: { name: 'asc' },
-    skip: offset,
-    take: safeLimit,
-    include: shopInclude,
->>>>>>> ef587ba (feat: endpoints tiendas destacadas y directorio)
   });
   const ratings = await getShopRatingsMap();
   return shops.map((shop) => {
@@ -427,7 +392,6 @@ export const getFeaturedShops = async (options?: { limit?: number }) => {
   });
 };
 
-<<<<<<< HEAD
 const normalizeInitialLetter = (raw: string) => {
   const cleaned = raw.trim().toUpperCase();
   if (!cleaned) return '';
@@ -441,12 +405,9 @@ export const getPublicShopsByLetter = async (
   options?: { limit?: number; offset?: number }
 ) => {
   const initial = normalizeInitialLetter(letter);
-  if (!initial) return [];
-  const rawLimit = Number(options?.limit);
-  const rawOffset = Number(options?.offset);
-  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : undefined;
-  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
-  const take = limit ? limit + 1 : undefined;
+  if (!initial) return { items: [], hasMore: false };
+  const safeLimit = clampLimit(Number(options?.limit), LETTER_DEFAULT_LIMIT, LETTER_MAX_LIMIT);
+  const offset = Number.isFinite(Number(options?.offset)) && Number(options?.offset) > 0 ? Number(options?.offset) : 0;
   const shops = await prisma.shop.findMany({
     where: {
       active: true,
@@ -458,10 +419,11 @@ export const getPublicShopsByLetter = async (
     },
     orderBy: { name: 'asc' },
     include: shopPublicInclude,
-    ...(take ? { take, skip: offset } : {}),
+    skip: offset,
+    take: safeLimit + 1,
   });
-  const hasMore = limit ? shops.length > limit : false;
-  const items = limit ? shops.slice(0, limit) : shops;
+  const hasMore = shops.length > safeLimit;
+  const items = shops.slice(0, safeLimit);
   const ratings = await getShopRatingsMap();
   const mapped = items.map((shop) => {
     const rating = ratings.get(shop.id);
@@ -471,13 +433,11 @@ export const getPublicShopsByLetter = async (
       ratingCount: rating?.count ?? 0,
     };
   });
-  if (!limit) return mapped;
   return { items: mapped, hasMore };
 };
 
 export const getFeaturedShops = async (options?: { limit?: number; referenceDate?: Date }) => {
-  const rawLimit = Number(options?.limit);
-  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 120) : 30;
+  const limit = clampLimit(Number(options?.limit), FEATURED_DEFAULT_LIMIT, FEATURED_MAX_LIMIT);
   const referenceDate = options?.referenceDate || new Date();
   const where = {
     active: true,
@@ -526,27 +486,28 @@ export const getFeaturedShops = async (options?: { limit?: number; referenceDate
   }
   const ratings = await getShopRatingsMap();
   return featured.map((shop) => {
-=======
+    const rating = ratings.get(shop.id);
+    return {
+      ...shop,
+      ratingAverage: rating?.avg ?? 0,
+      ratingCount: rating?.count ?? 0,
+    };
+  });
+};
+
 export const getShopsByLetter = async (options: { letter: string; limit?: number; offset?: number }) => {
-  const rawLetter = String(options.letter || '').trim().toUpperCase();
-  const letter = rawLetter.slice(0, 1);
-  if (!letter || !/[A-Z]/.test(letter)) {
-    return { items: [], hasMore: false };
-  }
+  const letter = normalizeInitialLetter(options.letter || '');
+  if (!letter) return { items: [], hasMore: false };
   const safeLimit = clampLimit(Number(options.limit), LETTER_DEFAULT_LIMIT, LETTER_MAX_LIMIT);
   const offset = Number.isFinite(Number(options.offset)) && Number(options.offset) > 0 ? Number(options.offset) : 0;
 
-  const where = {
-    active: true,
-    status: ShopStatus.ACTIVE,
-    name: {
-      startsWith: letter,
-      mode: 'insensitive' as const,
-    },
-  };
-
   const shops = await prisma.shop.findMany({
-    where,
+    where: {
+      name: {
+        startsWith: letter,
+        mode: 'insensitive',
+      },
+    },
     orderBy: { name: 'asc' },
     skip: offset,
     take: safeLimit + 1,
@@ -556,7 +517,6 @@ export const getShopsByLetter = async (options: { letter: string; limit?: number
   const slice = shops.slice(0, safeLimit);
   const ratings = await getShopRatingsMap();
   const items = slice.map((shop) => {
->>>>>>> ef587ba (feat: endpoints tiendas destacadas y directorio)
     const rating = ratings.get(shop.id);
     return {
       ...shop,
@@ -564,10 +524,7 @@ export const getShopsByLetter = async (options: { letter: string; limit?: number
       ratingCount: rating?.count ?? 0,
     };
   });
-<<<<<<< HEAD
-=======
   return { items, hasMore };
->>>>>>> ef587ba (feat: endpoints tiendas destacadas y directorio)
 };
 
 export const getShopById = async (id: string) => {

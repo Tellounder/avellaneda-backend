@@ -12,8 +12,6 @@ router.get('/', ShopsController.getShops);
 router.get('/featured', ShopsController.getFeaturedShops);
 router.get('/by-letter', ShopsController.getShopsByLetter);
 router.get('/map-data', ShopsController.getShopsMapData);
-router.get('/featured', ShopsController.getFeaturedShops);
-router.get('/by-letter', ShopsController.getShopsByLetter);
 router.get('/check-email', ShopsController.checkShopEmail);
 router.get('/:id', ShopsController.getShopById);
 router.delete('/:id', requireAdmin, ShopsController.deleteShop);

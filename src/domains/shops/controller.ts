@@ -52,32 +52,6 @@ export const getShops = async (req: Request, res: Response) => {
   res.json(sanitizeShopPayload(data, req));
 };
 
-export const getFeaturedShops = async (req: Request, res: Response) => {
-  try {
-    const limit = Number(req.query?.limit);
-    const data = await ShopsService.getFeaturedShops({ limit });
-    res.json(sanitizeShopPayload(data, req));
-  } catch (error) {
-    res.status(500).json({ message: 'Error al obtener tiendas destacadas', error });
-  }
-};
-
-export const getShopsByLetter = async (req: Request, res: Response) => {
-  try {
-    const letter = String(req.query?.letter || '');
-    const limit = Number(req.query?.limit);
-    const offset = Number(req.query?.offset);
-    const data = await ShopsService.getShopsByLetter({ letter, limit, offset });
-    if (Array.isArray(data)) {
-      return res.json(sanitizeShopPayload(data, req));
-    }
-    const items = sanitizeShopPayload(data.items, req);
-    return res.json({ items, hasMore: data.hasMore });
-  } catch (error) {
-    res.status(500).json({ message: 'Error al obtener directorio', error });
-  }
-};
-
 export const getShopById = async (req: Request, res: Response) => {
   try {
     const data = await ShopsService.getShopById(req.params.id);
@@ -108,9 +82,13 @@ export const getShopsByLetter = async (req: Request, res: Response) => {
   const letter = String(req.query?.letter || '').trim().toUpperCase();
   const limit = Number(req.query?.limit);
   const offset = Number(req.query?.offset);
-  const cacheKey = `shops:letter:${letter || 'none'}:${Number.isFinite(limit) ? limit : 'all'}:${Number.isFinite(offset) ? offset : 0}`;
+  const isAdmin = req.auth?.userType === 'ADMIN';
+  const scope = isAdmin ? 'admin' : 'public';
+  const cacheKey = `shops:letter:${scope}:${letter || 'none'}:${Number.isFinite(limit) ? limit : 'all'}:${Number.isFinite(offset) ? offset : 0}`;
   const data = await getOrSetCache(cacheKey, LETTER_SHOPS_CACHE_MS, () =>
-    ShopsService.getPublicShopsByLetter(letter, { limit, offset })
+    isAdmin
+      ? ShopsService.getShopsByLetter({ letter, limit, offset })
+      : ShopsService.getPublicShopsByLetter(letter, { limit, offset })
   );
   if (data && typeof data === 'object' && 'items' in (data as any)) {
     const payload = data as { items: any[]; hasMore: boolean };

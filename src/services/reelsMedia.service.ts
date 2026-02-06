@@ -87,9 +87,9 @@ const processPhotoSet = async (
   return outputs;
 };
 
-const processVideo = async (
+export const processVideoFromPath = async (
   shopId: string,
-  file: Express.Multer.File,
+  sourcePath: string,
   tempDir: string
 ) => {
   ensureFfmpeg();
@@ -97,7 +97,7 @@ const processVideo = async (
   const thumbOutput = path.join(tempDir, 'reel-thumb.jpg');
 
   await new Promise<void>((resolve, reject) => {
-    ffmpeg(file.path)
+    ffmpeg(sourcePath)
       .outputOptions([
         '-vf',
         'scale=-2:720',
@@ -123,7 +123,7 @@ const processVideo = async (
   });
 
   await new Promise<void>((resolve, reject) => {
-    ffmpeg(file.path)
+    ffmpeg(sourcePath)
       .on('end', resolve)
       .on('error', reject)
       .screenshots({
@@ -138,9 +138,21 @@ const processVideo = async (
   const thumbBuffer = await fs.readFile(thumbOutput);
 
   const videoUrl = await uploadBuffer(buildKey(shopId, 'reel.mp4'), videoBuffer, 'video/mp4');
-  const thumbnailUrl = await uploadBuffer(buildKey(shopId, 'reel-thumb.jpg'), thumbBuffer, 'image/jpeg');
+  const thumbnailUrl = await uploadBuffer(
+    buildKey(shopId, 'reel-thumb.jpg'),
+    thumbBuffer,
+    'image/jpeg'
+  );
 
   return { videoUrl, thumbnailUrl };
+};
+
+const processVideo = async (
+  shopId: string,
+  file: Express.Multer.File,
+  tempDir: string
+) => {
+  return processVideoFromPath(shopId, file.path, tempDir);
 };
 
 const cleanupFiles = async (files: Express.Multer.File[], tempDir: string) => {

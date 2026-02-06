@@ -13,7 +13,8 @@
     "import:shops": "ts-node scripts/import-shops-from-json.ts",
     "import:logos": "ts-node scripts/update-logos-from-csv.ts",
     "import:logos:email": "ts-node scripts/update-logos-from-mapping.ts",
-    "sanctions:run": "ts-node scripts/run-sanciones.ts"
+    "sanctions:run": "ts-node scripts/run-sanciones.ts",
+    "worker:reels": "ts-node src/workers/reelsWorker.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.15.0",

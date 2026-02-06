@@ -20,6 +20,7 @@ export const rateLimit = () => {
   const maxRequests = Number(process.env.RATE_LIMIT_MAX || 80);
 
   return (req: Request, res: Response, next: NextFunction) => {
+    if (req.method === 'GET') return next();
     const key = getClientKey(req);
     const now = Date.now();
     const bucket = buckets.get(key);
@@ -40,4 +41,3 @@ export const rateLimit = () => {
     return next();
   };
 };
-

@@ -592,7 +592,8 @@ export const createShop = async (data: any) => {
 
   const passwordHash = hashPassword(data.password);
 
-  const createdShop = await prisma.$transaction(async (tx) => {
+  const createdShop = await prisma.$transaction(
+    async (tx) => {
     const authUser = await tx.authUser.create({
       data: {
         email: authEmail,
@@ -647,7 +648,12 @@ export const createShop = async (data: any) => {
     );
 
     return createdShop;
-  });
+    },
+    {
+      maxWait: 20_000,
+      timeout: 60_000,
+    }
+  );
 
   if (normalizedEmail && isValidEmail(normalizedEmail) && !requiresEmailFix && process.env.FIREBASE_WEB_API_KEY) {
     try {

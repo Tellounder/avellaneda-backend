@@ -564,6 +564,7 @@ export const createShop = async (data: any) => {
   const website = sanitizeWebsite(data.website, catalogUrl);
   let authEmail = normalizedEmail;
   let requiresEmailFix = false;
+  let reuseAuthUserId: string | null = null;
 
   if (normalizedEmail) {
     const existingShop = await prisma.shop.findFirst({
@@ -583,10 +584,19 @@ export const createShop = async (data: any) => {
     authEmail = buildTechnicalEmail(shopId);
     requiresEmailFix = true;
   } else {
-    const existingAuthUser = await prisma.authUser.findUnique({ where: { email: authEmail } });
+    const existingAuthUser = await prisma.authUser.findUnique({
+      where: { email: authEmail },
+      include: { shop: { select: { id: true } } },
+    });
     if (existingAuthUser) {
-      authEmail = buildTechnicalEmail(shopId);
-      requiresEmailFix = true;
+      const hasShop = Boolean(existingAuthUser.shop?.id);
+      const isAdmin = existingAuthUser.userType === AuthUserType.ADMIN;
+      if (!hasShop && !isAdmin) {
+        reuseAuthUserId = existingAuthUser.id;
+      } else {
+        authEmail = buildTechnicalEmail(shopId);
+        requiresEmailFix = true;
+      }
     }
   }
 
@@ -594,20 +604,28 @@ export const createShop = async (data: any) => {
 
   const createdShop = await prisma.$transaction(
     async (tx) => {
-    const authUser = await tx.authUser.create({
-      data: {
-        email: authEmail,
-        passwordHash,
-        userType: AuthUserType.SHOP,
-        status: resolveAuthUserStatus(status, active),
-      },
-    });
+    const authUser = reuseAuthUserId
+      ? await tx.authUser.update({
+          where: { id: reuseAuthUserId },
+          data: {
+            userType: AuthUserType.SHOP,
+            status: resolveAuthUserStatus(status, active),
+          },
+        })
+      : await tx.authUser.create({
+          data: {
+            email: authEmail,
+            passwordHash,
+            userType: AuthUserType.SHOP,
+            status: resolveAuthUserStatus(status, active),
+          },
+        });
 
     const createdShop = await tx.shop.create({
       data: {
         id: shopId,
         authUserId: authUser.id,
-        requiresEmailFix,
+        requiresEmailFix: reuseAuthUserId ? false : requiresEmailFix,
         name: data.name,
         slug: data.slug || data.name.toLowerCase().replace(/ /g, '-'),
         logoUrl: data.logoUrl || '',

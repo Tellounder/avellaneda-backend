@@ -9,6 +9,8 @@ router.post('/', requireAdmin, ShopsController.createShop);
 // -------------------------------------------------------
 
 router.get('/', ShopsController.getShops);
+router.get('/featured', ShopsController.getFeaturedShops);
+router.get('/by-letter', ShopsController.getShopsByLetter);
 router.get('/map-data', ShopsController.getShopsMapData);
 router.get('/featured', ShopsController.getFeaturedShops);
 router.get('/by-letter', ShopsController.getShopsByLetter);

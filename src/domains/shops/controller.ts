@@ -52,6 +52,32 @@ export const getShops = async (req: Request, res: Response) => {
   res.json(sanitizeShopPayload(data, req));
 };
 
+export const getFeaturedShops = async (req: Request, res: Response) => {
+  try {
+    const limit = Number(req.query?.limit);
+    const data = await ShopsService.getFeaturedShops({ limit });
+    res.json(sanitizeShopPayload(data, req));
+  } catch (error) {
+    res.status(500).json({ message: 'Error al obtener tiendas destacadas', error });
+  }
+};
+
+export const getShopsByLetter = async (req: Request, res: Response) => {
+  try {
+    const letter = String(req.query?.letter || '');
+    const limit = Number(req.query?.limit);
+    const offset = Number(req.query?.offset);
+    const data = await ShopsService.getShopsByLetter({ letter, limit, offset });
+    if (Array.isArray(data)) {
+      return res.json(sanitizeShopPayload(data, req));
+    }
+    const items = sanitizeShopPayload(data.items, req);
+    return res.json({ items, hasMore: data.hasMore });
+  } catch (error) {
+    res.status(500).json({ message: 'Error al obtener directorio', error });
+  }
+};
+
 export const getShopById = async (req: Request, res: Response) => {
   try {
     const data = await ShopsService.getShopById(req.params.id);

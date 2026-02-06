@@ -61,7 +61,11 @@ const cacheShops = cacheMiddleware({
   ttlMs: 30_000,
   publicOnly: true,
   keyPrefix: 'shops:',
-  shouldCache: (req) => req.path === '/' || req.path === '/map-data',
+  shouldCache: (req) =>
+    req.path === '/' ||
+    req.path === '/map-data' ||
+    req.path === '/featured' ||
+    req.path === '/by-letter',
 });
 const cacheStreams = cacheMiddleware({
   ttlMs: 20_000,

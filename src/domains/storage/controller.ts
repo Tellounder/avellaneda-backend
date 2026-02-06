@@ -1,11 +1,33 @@
 ﻿import { Request, Response } from 'express';
 import fs from 'fs/promises';
+import path from 'path';
 import { createSignedUploadUrls, uploadShopImage as uploadShopImageToStorage } from './service';
 import { processReelUpload, enqueueReelVideoJob } from '../../services/reelsMedia.service';
 import { updateShop } from '../shops/service';
 
 const isImage = (type: string) => type.startsWith('image/');
 const isVideo = (type: string) => type.startsWith('video/');
+
+const guessContentType = (fileName: string) => {
+  const ext = path.extname(fileName || '').toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  if (ext === '.heic') return 'image/heic';
+  if (ext === '.heif') return 'image/heif';
+  if (ext === '.mp4') return 'video/mp4';
+  if (ext === '.mov') return 'video/quicktime';
+  if (ext === '.m4v') return 'video/x-m4v';
+  if (ext === '.webm') return 'video/webm';
+  return '';
+};
+
+const resolveContentType = (file: any) => {
+  const raw = String(file?.contentType || '').trim();
+  if (raw) return raw;
+  return guessContentType(String(file?.fileName || ''));
+};
 
 export const createReelUploadUrls = async (req: Request, res: Response) => {
   if (!req.auth) {
@@ -23,7 +45,12 @@ export const createReelUploadUrls = async (req: Request, res: Response) => {
   }
 
   const normalizedType = type === 'PHOTO_SET' ? 'PHOTO_SET' : 'VIDEO';
-  const normalizedFiles = Array.isArray(files) ? files : [];
+  const normalizedFiles = Array.isArray(files)
+    ? files.map((file: any) => ({
+        ...file,
+        contentType: resolveContentType(file),
+      }))
+    : [];
   if (!normalizedFiles.length) {
     return res.status(400).json({ message: 'Debes subir al menos un archivo.' });
   }
@@ -160,4 +187,3 @@ export const uploadShopImage = async (req: Request, res: Response) => {
     }
   }
 };
-

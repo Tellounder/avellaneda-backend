@@ -183,6 +183,33 @@ export const createQuotaWalletFromLegacy = async (
   return computed.extraBalances;
 };
 
+export const backfillQuotaWallets = async (options?: { batchSize?: number; now?: Date }) => {
+  const batchSize = Math.max(1, Number(options?.batchSize || process.env.QUOTA_WALLET_FIX_BATCH || 25));
+  const now = options?.now || new Date();
+
+  const shops = await prisma.shop.findMany({
+    where: { quotaWallet: { is: null } },
+    select: { id: true, plan: true, streamQuota: true, reelQuota: true },
+    take: batchSize,
+  });
+
+  let created = 0;
+  for (const shop of shops) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        const existing = await tx.quotaWallet.findUnique({ where: { shopId: shop.id } });
+        if (existing) return;
+        await createQuotaWalletFromLegacy(shop, tx, now);
+      });
+      created += 1;
+    } catch (error) {
+      console.error('[quota-wallet-backfill] Error creando wallet para', shop.id, error);
+    }
+  }
+
+  return { scanned: shops.length, created };
+};
+
 export const syncQuotaWalletToPlan = async (
   shopId: string,
   plan: string | null,

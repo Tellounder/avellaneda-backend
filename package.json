@@ -14,7 +14,8 @@
     "import:logos": "ts-node scripts/update-logos-from-csv.ts",
     "import:logos:email": "ts-node scripts/update-logos-from-mapping.ts",
     "sanctions:run": "ts-node scripts/run-sanciones.ts",
-    "worker:reels": "ts-node src/workers/reelsWorker.ts"
+    "worker:reels": "ts-node src/workers/reelsWorker.ts",
+    "worker:maintenance": "ts-node src/workers/maintenanceWorker.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.15.0",

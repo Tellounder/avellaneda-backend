@@ -539,33 +539,6 @@ export const getShopById = async (id: string) => {
   if (!shop) {
     return shop;
   }
-  if (!shop.quotaWallet) {
-    await createQuotaWalletFromLegacy(
-      {
-        id: shop.id,
-        plan: shop.plan,
-        streamQuota: shop.streamQuota,
-        reelQuota: shop.reelQuota,
-      },
-      prisma
-    );
-    const hydrated = await prisma.shop.findUnique({
-      where: { id },
-      include: {
-        streams: true,
-        reels: true,
-        ...shopInclude,
-      },
-    });
-    if (!hydrated) return hydrated;
-    const ratings = await getShopRatingsMap();
-    const rating = ratings.get(hydrated.id);
-    return {
-      ...hydrated,
-      ratingAverage: rating?.avg ?? 0,
-      ratingCount: rating?.count ?? 0,
-    };
-  }
   const ratings = await getShopRatingsMap();
   const rating = ratings.get(shop.id);
   return {

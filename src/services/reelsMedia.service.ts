@@ -6,8 +6,9 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs/promises';
 import sharp from 'sharp';
-import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
+// `fluent-ffmpeg` does not ship typings in our runtime path.
+const ffmpeg: any = require('fluent-ffmpeg');
 
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';

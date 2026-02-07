@@ -552,16 +552,41 @@ export const finishStream = async (id: string) => {
 
 export const runStreamLifecycle = async () => {
   const now = new Date();
-  const started = await prisma.stream.updateMany({
+  const upcomingDue = await prisma.stream.findMany({
     where: {
       status: StreamStatus.UPCOMING,
       scheduledAt: { lte: now },
     },
-    data: {
-      status: StreamStatus.LIVE,
-      startTime: now,
-    },
+    select: { id: true, scheduledAt: true, scheduledEndPlanned: true },
   });
+
+  const toAutoLive: string[] = [];
+  const toAutoFinish: string[] = [];
+  const upcomingMap = new Map(upcomingDue.map((stream) => [stream.id, stream]));
+  for (const stream of upcomingDue) {
+    const plannedEnd =
+      stream.scheduledEndPlanned ?? new Date(stream.scheduledAt.getTime() + 30 * 60 * 1000);
+    if (plannedEnd.getTime() <= now.getTime()) {
+      toAutoFinish.push(stream.id);
+    } else {
+      toAutoLive.push(stream.id);
+    }
+  }
+
+  let startedCount = 0;
+  if (toAutoLive.length > 0) {
+    for (const id of toAutoLive) {
+      const upcoming = upcomingMap.get(id);
+      await prisma.stream.update({
+        where: { id },
+        data: {
+          status: StreamStatus.LIVE,
+          startTime: upcoming?.scheduledAt ?? now,
+        },
+      });
+    }
+    startedCount = toAutoLive.length;
+  }
 
   const liveStreams = await prisma.stream.findMany({
     where: { status: StreamStatus.LIVE },
@@ -583,7 +608,14 @@ export const runStreamLifecycle = async () => {
     });
   }
 
-  return { started: started.count, finished: toFinish.length };
+  if (toAutoFinish.length > 0) {
+    await prisma.stream.updateMany({
+      where: { id: { in: toAutoFinish } },
+      data: { status: StreamStatus.FINISHED, endTime: now },
+    });
+  }
+
+  return { started: startedCount, finished: toFinish.length + toAutoFinish.length };
 };
 
 export const cancelStream = async (id: string, reason?: string) => {

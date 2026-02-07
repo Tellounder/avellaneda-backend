@@ -2,6 +2,8 @@ import {
   AuthUserStatus,
   AuthUserType,
   NotificationType,
+  Prisma,
+  PrismaClient,
   PurchaseStatus,
   PurchaseType,
   QuotaActorType,
@@ -13,7 +15,7 @@ import {
 import { createHash, randomBytes, randomUUID, scryptSync } from 'crypto';
 import prisma from './repo';
 import { getShopRatingsMap } from '../../services/ratings.service';
-import { computeAgendaSuspended, createQuotaWalletFromLegacy, creditLiveExtra, creditReelExtra } from '../../services/quota.service';
+import { computeAgendaSuspended, createQuotaWalletFromLegacy, creditLiveExtra, creditReelExtra, syncQuotaWalletToPlan } from '../../services/quota.service';
 import { notifyAdmins } from '../notifications/service';
 import { firebaseAuth, firebaseReady } from '../../lib/firebaseAdmin';
 import { resolvePlanTier } from './plan';
@@ -140,7 +142,7 @@ const syncAuthUserStatus = async (
   authUserId: string | null | undefined,
   status: ShopStatus | null | undefined,
   active?: boolean,
-  client = prisma
+  client: Prisma.TransactionClient | PrismaClient = prisma
 ) => {
   if (!authUserId) return;
   const nextStatus = resolveAuthUserStatus(status, active);
@@ -371,7 +373,6 @@ export const getPublicShops = async (options?: { limit?: number; offset?: number
   const rawOffset = Number(options?.offset);
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 500) : undefined;
   const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? rawOffset : 0;
-  const pagination = limit ? { take: limit, skip: offset } : {};
   const shops = await prisma.shop.findMany({
     where: {
       active: true,
@@ -379,7 +380,8 @@ export const getPublicShops = async (options?: { limit?: number; offset?: number
     },
     orderBy: { name: 'asc' },
     include: shopPublicInclude,
-    ...pagination,
+    take: limit,
+    skip: limit ? offset : undefined,
   });
   const ratings = await getShopRatingsMap();
   return shops.map((shop) => {
@@ -741,6 +743,9 @@ export const updateShop = async (id: string, data: any) => {
     agendaSuspendedUntil: data.agendaSuspendedUntil,
     agendaSuspendedByAdminId: data.agendaSuspendedByAdminId,
     agendaSuspendedReason: data.agendaSuspendedReason,
+    plan: data.plan,
+    streamQuota: data.streamQuota,
+    reelQuota: data.reelQuota,
   };
 
   Object.keys(updateData).forEach((key) => updateData[key] === undefined && delete updateData[key]);
@@ -755,6 +760,7 @@ export const updateShop = async (id: string, data: any) => {
   }
 
   return prisma.$transaction(async (tx) => {
+    const shouldSyncPlanQuota = data.plan !== undefined;
     const updatedShop = await tx.shop.update({
       where: { id },
       data: updateData,
@@ -767,6 +773,10 @@ export const updateShop = async (id: string, data: any) => {
 
     if (status !== undefined) {
       await syncAuthUserStatus(updatedShop.authUserId, updatedShop.status, updatedShop.active, tx);
+    }
+
+    if (shouldSyncPlanQuota) {
+      await syncQuotaWalletToPlan(updatedShop.id, updatedShop.plan, tx);
     }
 
     return updatedShop;
@@ -806,15 +816,13 @@ export const acceptShop = async (id: string, authUserId: string) => {
     Array.isArray(shop.paymentMethods) &&
     shop.paymentMethods.length > 0;
   const hasValidEmail = !shop.requiresEmailFix && isValidEmail(shop.email || '');
-  const hasActivePenalty = (shop.penalties || []).some((penalty) => penalty.active);
   const canAutoApprove =
     shop.status === ShopStatus.PENDING_VERIFICATION &&
     shop.active !== false &&
     hasValidEmail &&
     hasIdentity &&
     hasAddress &&
-    hasSales &&
-    !hasActivePenalty;
+    hasSales;
 
   const updated = await prisma.$transaction(async (tx) => {
     const updatedShop = await tx.shop.update({
@@ -1030,9 +1038,8 @@ export const assignOwner = async (shopId: string, payload: { authUserId?: string
 };
 
 export const togglePenalty = async (id: string) => {
-  const shop = await prisma.shop.findUnique({ where: { id } });
-  if (!shop) return null;
-  return shop;
+  void id;
+  throw new Error('Penalty legacy desactivado. Usar suspension de agenda y auditoria.');
 };
 
 export const activateShop = async (id: string, reason?: string) => {

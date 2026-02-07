@@ -3,6 +3,7 @@ import {
   AuthUserType,
   NotificationStatus,
   NotificationType,
+  Prisma,
   ReminderStatus,
   StreamStatus,
 } from '@prisma/client';
@@ -48,7 +49,7 @@ export const createNotification = async (
     refId?: string | null;
     notifyAt?: Date | null;
     status?: NotificationStatus;
-    payload?: Record<string, unknown> | null;
+    payload?: Prisma.InputJsonValue | null;
   }
 ) => {
   return prisma.notification.create({

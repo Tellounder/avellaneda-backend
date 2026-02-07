@@ -70,7 +70,8 @@ export const mercadoPagoWebhook = async (req: Request, res: Response) => {
       headers: req.headers as Record<string, string | string[] | undefined>,
     });
     if (!result.ok) {
-      return res.status(401).json({ message: result.message || 'Firma invalida.' });
+      const reason = 'message' in result ? result.message : undefined;
+      return res.status(401).json({ message: reason || 'Firma invalida.' });
     }
     return res.json({ received: true });
   } catch (error: any) {

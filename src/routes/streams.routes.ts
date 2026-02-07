@@ -17,6 +17,7 @@ router.post('/:id/finish', requireAuth, StreamsController.finishStream);
 router.post('/:id/report', requireAuth, StreamsController.reportStream);
 router.post('/:id/rate', requireAuth, StreamsController.rateStream);
 router.post('/:id/like', requireAuth, StreamsController.toggleLikeStream);
+router.post('/:id/view', StreamsController.registerStreamView);
 router.post('/:id/hide', requireAdmin, StreamsController.hideStream);
 router.post('/:id/show', requireAdmin, StreamsController.showStream);
 router.post('/:id/cancel', requireAuth, StreamsController.cancelStream);

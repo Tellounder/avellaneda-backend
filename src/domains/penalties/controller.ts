@@ -8,13 +8,15 @@ export const getPenalties = async (req: Request, res: Response) => {
 };
 
 export const applyPenalty = async (req: Request, res: Response) => {
-  const data = await PenaltiesService.applyPenalty(req.params.shopId, req.body?.reason);
-  res.json(data);
+  return res.status(410).json({
+    message: 'Penalty legacy desactivado. Usar motor de sanciones por reportes.',
+  });
 };
 
 export const removePenalty = async (req: Request, res: Response) => {
-  const data = await PenaltiesService.removePenalty(req.params.shopId);
-  res.json(data);
+  return res.status(410).json({
+    message: 'Penalty legacy desactivado. Usar suspension de agenda y auditoria.',
+  });
 };
 
 export const runSanctions = async (_req: Request, res: Response) => {

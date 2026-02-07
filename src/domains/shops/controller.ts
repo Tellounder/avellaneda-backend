@@ -152,12 +152,9 @@ export const buyReelQuota = async (req: Request, res: Response) => {
 };
 
 export const togglePenalty = async (req: Request, res: Response) => {
-  try {
-    const data = await ShopsService.togglePenalty(req.params.id);
-    res.json(sanitizeShopPayload(data, req));
-  } catch (error) {
-    res.status(500).json({ message: 'Error al cambiar penalizaciÃ³n', error });
-  }
+  res.status(410).json({
+    message: 'Penalty legacy desactivado. Usar suspension de agenda y auditoria.',
+  });
 };
 
 export const activateShop = async (req: Request, res: Response) => {

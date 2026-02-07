@@ -3,7 +3,7 @@ import { AuthUserType, NotificationType, PurchaseStatus, PurchaseType, QuotaActo
 import prisma from './repo';
 import { computeAgendaSuspended, creditLiveExtra, creditReelExtra, syncQuotaWalletToPlan } from '../../services/quota.service';
 import { createNotification } from '../notifications/service';
-import type { AuthContext } from './auth.service';
+import type { AuthContext } from '../auth/service';
 import { isUpgradeAllowed, resolvePlanCode } from '../shops/plan';
 
 type PreferencePayload = {

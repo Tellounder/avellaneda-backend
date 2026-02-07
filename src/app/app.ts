@@ -47,7 +47,7 @@ app.use(
 );
 app.use(
   express.json({
-    verify: (req, _res, buf) => {
+    verify: (req: express.Request, _res, buf) => {
       req.rawBody = buf.toString('utf8');
     },
   })

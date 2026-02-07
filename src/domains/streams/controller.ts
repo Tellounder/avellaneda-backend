@@ -268,6 +268,21 @@ export const showStream = async (req: Request, res: Response) => {
   }
 };
 
+export const registerStreamView = async (req: Request, res: Response) => {
+  try {
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const firstForwardedIp =
+      Array.isArray(forwardedFor) ? forwardedFor[0] : String(forwardedFor || '').split(',')[0]?.trim();
+    const ip = firstForwardedIp || req.ip || 'unknown-ip';
+    const userAgent = String(req.headers['user-agent'] || 'unknown-ua').slice(0, 120);
+    const viewerKey = `${ip}|${userAgent}`;
+    const data = await StreamsService.registerStreamView(req.params.id, viewerKey);
+    res.json(data);
+  } catch (error: any) {
+    res.status(400).json({ message: error.message || 'Error al registrar vista', error });
+  }
+};
+
 export const cancelStream = async (req: Request, res: Response) => {
   try {
     await ensureStreamAccess(req, req.params.id);

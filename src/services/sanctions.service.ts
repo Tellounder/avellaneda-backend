@@ -17,7 +17,7 @@ import prisma from '../../prisma/client';
 import { createQuotaTransaction } from './quota.service';
 
 const REPORT_THRESHOLD = 5;
-const REPORT_GRACE_MINUTES = 5;
+const REPORT_GRACE_MINUTES = 6;
 const REPROGRAM_DAYS = 7;
 const RESOLUTION_WINDOW_HOURS = 48;
 
@@ -248,11 +248,14 @@ const processSanctionForLive = async (streamId: string) => {
   if (!stream || !stream.shop) {
     return { skipped: true };
   }
+  if (stream.status !== StreamStatus.LIVE) {
+    return { skipped: true };
+  }
   if (isSanctionBlocked(stream.status)) {
     return { skipped: true };
   }
 
-  const referenceTime = stream.endTime || stream.startTime || stream.scheduledAt;
+  const referenceTime = stream.startTime || stream.scheduledAt;
   const validFrom = addMinutes(referenceTime, REPORT_GRACE_MINUTES);
   const validatedReports = await countValidatedReports(stream.id, validFrom, client);
   if (validatedReports < REPORT_THRESHOLD) {
@@ -431,7 +434,7 @@ const processPendingReprogramTimeouts = async () => {
 
 export const runSanctionsEngine = async () => {
   const candidates = await prisma.stream.findMany({
-    where: { status: StreamStatus.FINISHED },
+    where: { status: StreamStatus.LIVE },
     select: { id: true, startTime: true, scheduledAt: true },
   });
 

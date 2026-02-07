@@ -1,4 +1,6 @@
 import {
+  Prisma,
+  PrismaClient,
   AuthUserStatus,
   QuotaActorType,
   QuotaDirection,
@@ -15,6 +17,30 @@ import prisma from './repo';
 import { getShopRatingsMap, updateShopAggregate } from '../../services/ratings.service';
 import { createQuotaTransaction, getLiveQuotaSnapshot, reserveLiveQuota } from '../../services/quota.service';
 import { createNotification, notifyAdmins } from '../notifications/service';
+
+const STREAM_VIEW_DEDUP_MS = Math.max(5_000, Number(process.env.STREAM_VIEW_DEDUP_MS || 60_000));
+const recentViewByViewer = new Map<string, number>();
+
+const shouldCountStreamView = (streamId: string, viewerKey?: string) => {
+  if (!viewerKey) return true;
+  const now = Date.now();
+  const key = `${streamId}:${viewerKey}`;
+  const previous = recentViewByViewer.get(key);
+  if (previous && now - previous < STREAM_VIEW_DEDUP_MS) {
+    return false;
+  }
+
+  recentViewByViewer.set(key, now);
+  if (recentViewByViewer.size > 20_000) {
+    const minTs = now - STREAM_VIEW_DEDUP_MS * 5;
+    for (const [mapKey, ts] of recentViewByViewer) {
+      if (ts < minTs) {
+        recentViewByViewer.delete(mapKey);
+      }
+    }
+  }
+  return true;
+};
 
 const normalizePlatform = (value: unknown): SocialPlatform => {
   if (value === 'Instagram' || value === 'TikTok' || value === 'Facebook' || value === 'YouTube') {
@@ -99,7 +125,11 @@ const clearRemindersForStream = async (streamId: string) => {
 const hasSocialHandle = (handles: { platform: SocialPlatform }[], platform: SocialPlatform) =>
   handles.some((handle) => handle.platform === platform);
 
-const validateStreamSchedule = async (data: any, excludeId?: string, client = prisma) => {
+const validateStreamSchedule = async (
+  data: any,
+  excludeId?: string,
+  client: Prisma.TransactionClient | PrismaClient = prisma
+) => {
   const shopId = String(data.shopId || data.shop?.id || '');
   if (!shopId) throw new Error('Tienda invalida.');
 
@@ -299,7 +329,11 @@ export const updateStream = async (id: string, data: any) => {
   let existing: Awaited<ReturnType<typeof prisma.stream.findUnique>> | null = null;
   if (!isAdminOverride && scheduledAt) {
     existing = await prisma.stream.findUnique({ where: { id }, include: { shop: true } });
-    if (existing && ![StreamStatus.UPCOMING, StreamStatus.PENDING_REPROGRAMMATION].includes(existing.status)) {
+    if (
+      existing &&
+      existing.status !== StreamStatus.UPCOMING &&
+      existing.status !== StreamStatus.PENDING_REPROGRAMMATION
+    ) {
       throw new Error('Solo puedes editar vivos programados.');
     }
     await validateStreamSchedule({ ...data, shopId: existing?.shopId }, id, prisma);
@@ -557,7 +591,10 @@ export const cancelStream = async (id: string, reason?: string) => {
   if (!stream) {
     throw new Error('Vivo no encontrado.');
   }
-  if (![StreamStatus.UPCOMING, StreamStatus.PENDING_REPROGRAMMATION].includes(stream.status)) {
+  if (
+    stream.status !== StreamStatus.UPCOMING &&
+    stream.status !== StreamStatus.PENDING_REPROGRAMMATION
+  ) {
     throw new Error('Solo puedes cancelar vivos programados.');
   }
   const updated = await prisma.stream.update({
@@ -615,6 +652,29 @@ export const showStream = async (id: string) => {
     where: { id },
     data: { hidden: false },
   });
+};
+
+export const registerStreamView = async (streamId: string, viewerKey?: string) => {
+  const stream = await prisma.stream.findUnique({
+    where: { id: streamId },
+    select: { id: true, hidden: true, status: true, views: true },
+  });
+  if (!stream) {
+    throw new Error('Vivo no encontrado.');
+  }
+  if (stream.hidden || stream.status === StreamStatus.BANNED) {
+    return { counted: false, views: stream.views };
+  }
+  if (!shouldCountStreamView(streamId, viewerKey)) {
+    return { counted: false, views: stream.views };
+  }
+
+  const updated = await prisma.stream.update({
+    where: { id: streamId },
+    data: { views: { increment: 1 } },
+    select: { views: true },
+  });
+  return { counted: true, views: updated.views };
 };
 
 

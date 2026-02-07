@@ -284,6 +284,7 @@ model Stream {
   platform    SocialPlatform @default(Instagram)
   url         String?
   extensionCount Int   @default(0)
+  views       Int      @default(0)
   likes       Int      @default(0)
   reportCount Int      @default(0)
   editCount   Int      @default(0)

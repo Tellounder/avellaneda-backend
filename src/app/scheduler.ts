@@ -4,6 +4,24 @@ import { runStreamLifecycle } from '../domains/streams/service';
 
 const parseBool = (value?: string) => value === 'true' || value === '1';
 
+const buildLockedJob = (name: string, task: () => Promise<unknown>) => {
+  let isRunning = false;
+  return async () => {
+    if (isRunning) {
+      console.log(`[scheduler] ${name}: omitido, ciclo anterior sigue en ejecucion`);
+      return;
+    }
+    isRunning = true;
+    try {
+      await task();
+    } catch (error) {
+      console.error(`[scheduler] ${name}: error`, error);
+    } finally {
+      isRunning = false;
+    }
+  };
+};
+
 export const startSchedulers = () => {
   const enableNotifications = parseBool(process.env.ENABLE_NOTIFICATION_CRON);
   const enableSanctions = parseBool(process.env.ENABLE_SANCTIONS_CRON);
@@ -14,26 +32,28 @@ export const startSchedulers = () => {
   const streamsInterval = Number(process.env.STREAMS_CRON_MINUTES || 5);
 
   if (enableNotifications) {
+    const runNotificationsJob = buildLockedJob('notifications', () =>
+      runReminderNotifications(notificationWindow)
+    );
+    void runNotificationsJob();
     setInterval(() => {
-      runReminderNotifications(notificationWindow).catch((error) => {
-        console.error('Error running notification scheduler', error);
-      });
+      void runNotificationsJob();
     }, Math.max(notificationInterval, 1) * 60 * 1000);
   }
 
   if (enableSanctions) {
+    const runSanctionsJob = buildLockedJob('sanctions', runSanctionsEngine);
+    void runSanctionsJob();
     setInterval(() => {
-      runSanctionsEngine().catch((error) => {
-        console.error('Error running sanctions scheduler', error);
-      });
+      void runSanctionsJob();
     }, Math.max(sanctionsInterval, 5) * 60 * 1000);
   }
 
   if (enableStreams) {
+    const runStreamsJob = buildLockedJob('streams-lifecycle', runStreamLifecycle);
+    void runStreamsJob();
     setInterval(() => {
-      runStreamLifecycle().catch((error) => {
-        console.error('Error running streams lifecycle', error);
-      });
+      void runStreamsJob();
     }, Math.max(streamsInterval, 1) * 60 * 1000);
   }
 };

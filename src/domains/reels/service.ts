@@ -62,6 +62,7 @@ type CreateReelInput = {
   photoUrls?: string[];
   thumbnailUrl?: string | null;
   presetLabel?: string | null;
+  editorState?: any;
   durationSeconds?: number;
   status?: ReelStatus;
   processingJobId?: string | null;
@@ -89,6 +90,7 @@ export const createReel = async (
   let thumbnailUrl = input.thumbnailUrl || null;
   const presetLabelRaw = input.presetLabel?.trim() || '';
   const presetLabel = presetLabelRaw ? presetLabelRaw.slice(0, 48) : null;
+  const editorState = input.editorState ?? null;
 
   if (status === ReelStatus.PROCESSING && input.processingJobId) {
     const processed = consumeCompletedJob(input.processingJobId);
@@ -125,6 +127,7 @@ export const createReel = async (
           photoUrls,
           thumbnailUrl,
           presetLabel,
+          editorState,
           durationSeconds,
           status,
           expiresAt,

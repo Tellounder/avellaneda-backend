@@ -61,7 +61,7 @@ const claimReel = async (reelId: string, jobId: string) => {
   return updated.count === 1;
 };
 
-const processReel = async (reel: { id: string; shopId: string; videoUrl: string | null }) => {
+const processReel = async (reel: { id: string; shopId: string; videoUrl: string | null; editorState?: any }) => {
   if (!reel.videoUrl) return;
   const jobId = crypto.randomUUID();
   const claimed = await claimReel(reel.id, jobId);
@@ -71,7 +71,16 @@ const processReel = async (reel: { id: string; shopId: string; videoUrl: string 
   const sourcePath = path.join(tempDir, 'source-video');
   try {
     await downloadToFile(reel.videoUrl, sourcePath);
-    const { videoUrl, thumbnailUrl } = await processVideoFromPath(reel.shopId, sourcePath, tempDir);
+    const { videoUrl, thumbnailUrl } = await processVideoFromPath(
+      reel.shopId,
+      sourcePath,
+      tempDir,
+      reel.editorState
+    );
+    const nextEditorState =
+      reel.editorState && typeof reel.editorState === 'object'
+        ? { ...reel.editorState, rendered: true, renderedAt: new Date().toISOString() }
+        : reel.editorState;
     await prisma.reel.update({
       where: { id: reel.id },
       data: {
@@ -80,6 +89,7 @@ const processReel = async (reel: { id: string; shopId: string; videoUrl: string 
         status: ReelStatus.ACTIVE,
         hidden: false,
         processingJobId: null,
+        editorState: nextEditorState,
       },
     });
     console.log(`[reels-worker] Procesado OK: ${reel.id}`);
@@ -108,6 +118,12 @@ const runOnce = async () => {
     },
     orderBy: { createdAt: 'desc' },
     take: BATCH_SIZE,
+    select: {
+      id: true,
+      shopId: true,
+      videoUrl: true,
+      editorState: true,
+    },
   });
 
   for (const reel of reels) {

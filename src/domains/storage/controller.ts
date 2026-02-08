@@ -90,7 +90,7 @@ export const uploadReelMedia = async (req: Request, res: Response) => {
   if (!req.auth) {
     return res.status(401).json({ message: 'Autenticacion requerida.' });
   }
-  const { shopId, type } = req.body || {};
+  const { shopId, type, editorState } = req.body || {};
   if (!shopId) {
     return res.status(400).json({ message: 'shopId requerido.' });
   }
@@ -139,6 +139,7 @@ export const uploadReelMedia = async (req: Request, res: Response) => {
       shopId,
       type: normalizedType,
       files: files as Express.Multer.File[],
+      editorState,
     });
     res.json(payload);
   } catch (error: any) {

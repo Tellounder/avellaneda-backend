@@ -4,7 +4,7 @@
   "main": "src/app/server.ts",
   "scripts": {
     "start": "npx prisma generate && ts-node src/app/server.ts",
-    "dev": "ts-node-dev --respawn --transpile-only src/app/server.ts",
+    "dev": "npx prisma generate && ts-node-dev --respawn --transpile-only src/app/server.ts",
     "backfill:authusers": "ts-node scripts/backfill-authusers.ts",
     "backfill:quotawallets": "ts-node scripts/backfill-quotawallets.ts",
     "backfill:mapcoords": "ts-node scripts/backfill-map-coords.ts",

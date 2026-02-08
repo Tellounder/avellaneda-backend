@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import path from 'path';
 import os from 'os';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import sharp from 'sharp';
 import ffmpegPath from 'ffmpeg-static';
 // `fluent-ffmpeg` does not ship typings in our runtime path.
@@ -13,6 +14,11 @@ const ffmpeg: any = require('fluent-ffmpeg');
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const reelsBucket = process.env.SUPABASE_REELS_BUCKET || 'reels';
+const fontFile = process.env.REEL_FONT_FILE || '';
+const resolvedFontFile =
+  fontFile && fsSync.existsSync(fontFile) ? fontFile : '';
+const TARGET_WIDTH = 720;
+const TARGET_HEIGHT = 1280;
 
 const assertSupabaseConfigured = () => {
   if (!supabaseUrl || !supabaseKey) {
@@ -67,6 +73,59 @@ const buildKey = (shopId: string, name: string) => {
   return `processed/shops/${shopId}/${Date.now()}-${safeName}`;
 };
 
+const clampNumber = (value: number, min: number, max: number, fallback: number) => {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+};
+
+const escapeDrawText = (value: string) =>
+  value.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'");
+
+const buildEditorFilter = (editorState: any) => {
+  const baseFilter = `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+  let filter = `[0:v]${baseFilter}[base]`;
+  let currentLabel = 'base';
+
+  const transform = editorState?.mediaTransforms?.[0];
+  if (transform) {
+    const scale = clampNumber(Number(transform.scale ?? 1), 0.2, 4, 1);
+    const rotationRad = ((Number(transform.rotation) || 0) * Math.PI) / 180;
+    const offsetX = Math.round((Number(transform.x) || 0) * TARGET_WIDTH);
+    const offsetY = Math.round((Number(transform.y) || 0) * TARGET_HEIGHT);
+    const overlayX = `(W-w)/2+${offsetX}`;
+    const overlayY = `(H-h)/2+${offsetY}`;
+    filter += `;[base]scale=iw*${scale}:ih*${scale},rotate=${rotationRad}:fillcolor=black@0[scaled]`;
+    filter += `;nullsrc=size=${TARGET_WIDTH}x${TARGET_HEIGHT}[canvas]`;
+    filter += `;[canvas][scaled]overlay=${overlayX}:${overlayY}[v0]`;
+    currentLabel = 'v0';
+  }
+
+  const stickers = Array.isArray(editorState?.stickers) ? editorState.stickers : [];
+  const fontOption = resolvedFontFile
+    ? `:fontfile='${escapeDrawText(resolvedFontFile)}'`
+    : '';
+
+  stickers.forEach((sticker: any, index: number) => {
+    const rawText = String(sticker?.text || '').trim();
+    if (!rawText) return;
+    const x = Math.round(clampNumber(Number(sticker.x), -2, 2, 0) * TARGET_WIDTH);
+    const y = Math.round(clampNumber(Number(sticker.y), -2, 2, 0) * TARGET_HEIGHT);
+    const scale = clampNumber(Number(sticker.scale ?? 1), 0.5, 3, 1);
+    const fontSize = Math.max(16, Math.round(42 * scale));
+    const color = String(sticker.color || '#ffffff').replace('#', '') || 'ffffff';
+    const text = escapeDrawText(rawText);
+    const nextLabel = `vt${index}`;
+    filter += `;[${currentLabel}]drawtext${fontOption}:text='${text}':x=${x}:y=${y}:fontsize=${fontSize}:fontcolor=${color}:shadowcolor=black@0.45:shadowx=2:shadowy=2[${nextLabel}]`;
+    currentLabel = nextLabel;
+  });
+
+  if (currentLabel !== 'vout') {
+    filter += `;[${currentLabel}]null[vout]`;
+  }
+
+  return { filter, outputLabel: 'vout' };
+};
+
 const processPhotoSet = async (
   shopId: string,
   files: Express.Multer.File[],
@@ -91,17 +150,22 @@ const processPhotoSet = async (
 export const processVideoFromPath = async (
   shopId: string,
   sourcePath: string,
-  tempDir: string
+  tempDir: string,
+  editorState?: any
 ) => {
   ensureFfmpeg();
   const videoOutput = path.join(tempDir, 'reel-video.mp4');
   const thumbOutput = path.join(tempDir, 'reel-thumb.jpg');
+  const { filter, outputLabel } = buildEditorFilter(editorState);
 
   await new Promise<void>((resolve, reject) => {
     ffmpeg(sourcePath)
+      .complexFilter(filter, outputLabel)
       .outputOptions([
-        '-vf',
-        'scale=-2:720',
+        '-map',
+        `[${outputLabel}]`,
+        '-map',
+        '0:a?',
         '-c:v',
         'libx264',
         '-preset',
@@ -116,6 +180,7 @@ export const processVideoFromPath = async (
         'aac',
         '-b:a',
         '128k',
+        '-shortest',
       ])
       .output(videoOutput)
       .on('end', resolve)
@@ -151,9 +216,10 @@ export const processVideoFromPath = async (
 const processVideo = async (
   shopId: string,
   file: Express.Multer.File,
-  tempDir: string
+  tempDir: string,
+  editorState?: any
 ) => {
-  return processVideoFromPath(shopId, file.path, tempDir);
+  return processVideoFromPath(shopId, file.path, tempDir, editorState);
 };
 
 const cleanupFiles = async (files: Express.Multer.File[], tempDir: string) => {
@@ -215,10 +281,12 @@ export const processReelUpload = async ({
   shopId,
   type,
   files,
+  editorState,
 }: {
   shopId: string;
   type: 'VIDEO' | 'PHOTO_SET';
   files: Express.Multer.File[];
+  editorState?: any;
 }) => {
   if (!files.length) {
     throw new Error('No se recibieron archivos para procesar.');
@@ -226,7 +294,7 @@ export const processReelUpload = async ({
   const tempDir = await createTempDir();
   try {
     if (type === 'VIDEO') {
-      const { videoUrl, thumbnailUrl } = await processVideo(shopId, files[0], tempDir);
+      const { videoUrl, thumbnailUrl } = await processVideo(shopId, files[0], tempDir, editorState);
       return { videoUrl, thumbnailUrl, photoUrls: [] as string[] };
     }
 

@@ -322,6 +322,7 @@ model Reel {
   photoUrls String[] @default([])
   thumbnailUrl String?
   presetLabel String?
+  editorState Json?
   durationSeconds Int @default(10)
   status    ReelStatus @default(ACTIVE)
   processingJobId String? @unique

@@ -106,16 +106,14 @@ const processReel = async (reel: { id: string; shopId: string; videoUrl: string 
 
 const runOnce = async () => {
   const now = new Date();
-  const reels = await prisma.reel.findMany({
-    where: {
-      type: ReelType.VIDEO,
-      hidden: false,
-      status: ReelStatus.ACTIVE,
-      expiresAt: { gte: now },
-      videoUrl: { not: null },
-      processingJobId: null,
-      OR: [{ thumbnailUrl: null }, { thumbnailUrl: '' }],
-    },
+    const reels = await prisma.reel.findMany({
+      where: {
+        type: ReelType.VIDEO,
+        status: ReelStatus.PROCESSING,
+        expiresAt: { gte: now },
+        videoUrl: { not: null },
+        processingJobId: null,
+      },
     orderBy: { createdAt: 'desc' },
     take: BATCH_SIZE,
     select: {

@@ -101,6 +101,11 @@ export const createReel = async (
     }
   }
 
+  // All video reels are processed by the worker before publishing.
+  if (normalizedType === ReelType.VIDEO) {
+    status = ReelStatus.PROCESSING;
+  }
+
   if (normalizedType === ReelType.VIDEO && !videoUrl && status !== ReelStatus.PROCESSING) {
     throw new Error('Se requiere videoUrl para reels de video.');
   }

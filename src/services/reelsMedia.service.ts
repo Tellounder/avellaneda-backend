@@ -6,7 +6,6 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs/promises';
 import fsSync from 'fs';
-import sharp from 'sharp';
 import ffmpegPath from 'ffmpeg-static';
 // `fluent-ffmpeg` does not ship typings in our runtime path.
 const ffmpeg: any = require('fluent-ffmpeg');
@@ -81,12 +80,13 @@ const clampNumber = (value: number, min: number, max: number, fallback: number) 
 const escapeDrawText = (value: string) =>
   value.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'");
 
-const buildEditorFilter = (editorState: any) => {
+const buildEditorFilter = (editorState: any, mediaIndex = 0) => {
   const baseFilter = `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
   let filter = `[0:v]${baseFilter}[base]`;
   let currentLabel = 'base';
 
-  const transform = editorState?.mediaTransforms?.[0];
+  const transforms = Array.isArray(editorState?.mediaTransforms) ? editorState.mediaTransforms : [];
+  const transform = transforms[mediaIndex] || transforms[0];
   if (transform) {
     const scale = clampNumber(Number(transform.scale ?? 1), 0.2, 4, 1);
     const rotationRad = ((Number(transform.rotation) || 0) * Math.PI) / 180;
@@ -129,22 +129,50 @@ const buildEditorFilter = (editorState: any) => {
 const processPhotoSet = async (
   shopId: string,
   files: Express.Multer.File[],
-  tempDir: string
+  tempDir: string,
+  editorState?: any
 ) => {
   const outputs: string[] = [];
-  for (const file of files) {
-    const outputName = `${path.parse(file.originalname).name}.webp`;
-    const outputPath = path.join(tempDir, outputName);
-    await sharp(file.path)
-      .resize({ width: 1080, withoutEnlargement: true })
-      .webp({ quality: 82 })
-      .toFile(outputPath);
-
-    const buffer = await fs.readFile(outputPath);
-    const publicUrl = await uploadBuffer(buildKey(shopId, outputName), buffer, 'image/webp');
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    if (!file) continue;
+    const publicUrl = await processPhotoFromPath(shopId, file.path, tempDir, editorState, index);
     outputs.push(publicUrl);
   }
   return outputs;
+};
+
+export const processPhotoFromPath = async (
+  shopId: string,
+  sourcePath: string,
+  tempDir: string,
+  editorState?: any,
+  mediaIndex = 0
+) => {
+  ensureFfmpeg();
+  const outputName = `reel-photo-${mediaIndex}.jpg`;
+  const outputPath = path.join(tempDir, outputName);
+  const { filter, outputLabel } = buildEditorFilter(editorState, mediaIndex);
+
+  await new Promise<void>((resolve, reject) => {
+    ffmpeg(sourcePath)
+      .complexFilter(filter, outputLabel)
+      .outputOptions([
+        '-map',
+        `[${outputLabel}]`,
+        '-frames:v',
+        '1',
+        '-q:v',
+        '4',
+      ])
+      .output(outputPath)
+      .on('end', resolve)
+      .on('error', reject)
+      .run();
+  });
+
+  const buffer = await fs.readFile(outputPath);
+  return uploadBuffer(buildKey(shopId, outputName), buffer, 'image/jpeg');
 };
 
 export const processVideoFromPath = async (
@@ -156,7 +184,7 @@ export const processVideoFromPath = async (
   ensureFfmpeg();
   const videoOutput = path.join(tempDir, 'reel-video.mp4');
   const thumbOutput = path.join(tempDir, 'reel-thumb.jpg');
-  const { filter, outputLabel } = buildEditorFilter(editorState);
+  const { filter, outputLabel } = buildEditorFilter(editorState, 0);
 
   await new Promise<void>((resolve, reject) => {
     ffmpeg(sourcePath)
@@ -189,7 +217,7 @@ export const processVideoFromPath = async (
   });
 
   await new Promise<void>((resolve, reject) => {
-    ffmpeg(sourcePath)
+    ffmpeg(videoOutput)
       .on('end', resolve)
       .on('error', reject)
       .screenshots({
@@ -298,7 +326,7 @@ export const processReelUpload = async ({
       return { videoUrl, thumbnailUrl, photoUrls: [] as string[] };
     }
 
-    const photoUrls = await processPhotoSet(shopId, files, tempDir);
+    const photoUrls = await processPhotoSet(shopId, files, tempDir, editorState);
     return { photoUrls, videoUrl: null, thumbnailUrl: null };
   } finally {
     await cleanupFiles(files, tempDir);

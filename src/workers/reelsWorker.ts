@@ -7,7 +7,7 @@ import os from 'os';
 import path from 'path';
 import { ReelStatus, ReelType } from '@prisma/client';
 import prisma from '../../prisma/client';
-import { processVideoFromPath } from '../services/reelsMedia.service';
+import { processPhotoFromPath, processVideoFromPath } from '../services/reelsMedia.service';
 
 const BATCH_SIZE = Math.max(1, Number(process.env.REEL_WORKER_BATCH || 3));
 const INTERVAL_MS = Math.max(15_000, Number(process.env.REEL_WORKER_INTERVAL_MS || 60_000));
@@ -61,22 +61,69 @@ const claimReel = async (reelId: string, jobId: string) => {
   return updated.count === 1;
 };
 
-const processReel = async (reel: { id: string; shopId: string; videoUrl: string | null; editorState?: any }) => {
-  if (!reel.videoUrl) return;
+const getExtensionFromUrl = (url: string) => {
+  try {
+    const pathname = new URL(url).pathname;
+    const ext = path.extname(pathname);
+    if (ext && ext.length <= 6) return ext;
+  } catch {
+    // ignore parsing errors
+  }
+  return '';
+};
+
+const processReel = async (reel: {
+  id: string;
+  shopId: string;
+  type: ReelType;
+  videoUrl: string | null;
+  photoUrls: string[];
+  editorState?: any;
+}) => {
+  if (reel.type === ReelType.VIDEO && !reel.videoUrl) return;
+  if (reel.type === ReelType.PHOTO_SET && (!reel.photoUrls || reel.photoUrls.length === 0)) return;
   const jobId = crypto.randomUUID();
   const claimed = await claimReel(reel.id, jobId);
   if (!claimed) return;
 
   const tempDir = await createTempDir();
-  const sourcePath = path.join(tempDir, 'source-video');
   try {
-    await downloadToFile(reel.videoUrl, sourcePath);
-    const { videoUrl, thumbnailUrl } = await processVideoFromPath(
-      reel.shopId,
-      sourcePath,
-      tempDir,
-      reel.editorState
-    );
+    let nextVideoUrl: string | null = null;
+    let nextThumbUrl: string | null = null;
+    let nextPhotoUrls: string[] = [];
+
+    if (reel.type === ReelType.VIDEO && reel.videoUrl) {
+      const sourcePath = path.join(tempDir, 'source-video');
+      await downloadToFile(reel.videoUrl, sourcePath);
+      const { videoUrl, thumbnailUrl } = await processVideoFromPath(
+        reel.shopId,
+        sourcePath,
+        tempDir,
+        reel.editorState
+      );
+      nextVideoUrl = videoUrl;
+      nextThumbUrl = thumbnailUrl;
+    }
+
+    if (reel.type === ReelType.PHOTO_SET) {
+      for (let index = 0; index < reel.photoUrls.length; index += 1) {
+        const url = reel.photoUrls[index];
+        if (!url) continue;
+        const ext = getExtensionFromUrl(url) || '.jpg';
+        const sourcePath = path.join(tempDir, `source-photo-${index}${ext}`);
+        await downloadToFile(url, sourcePath);
+        const processedUrl = await processPhotoFromPath(
+          reel.shopId,
+          sourcePath,
+          tempDir,
+          reel.editorState,
+          index
+        );
+        nextPhotoUrls.push(processedUrl);
+      }
+      nextThumbUrl = nextPhotoUrls[0] || null;
+    }
+
     const nextEditorState =
       reel.editorState && typeof reel.editorState === 'object'
         ? { ...reel.editorState, rendered: true, renderedAt: new Date().toISOString() }
@@ -84,8 +131,9 @@ const processReel = async (reel: { id: string; shopId: string; videoUrl: string 
     await prisma.reel.update({
       where: { id: reel.id },
       data: {
-        videoUrl,
-        thumbnailUrl,
+        videoUrl: nextVideoUrl,
+        photoUrls: nextPhotoUrls,
+        thumbnailUrl: nextThumbUrl,
         status: ReelStatus.ACTIVE,
         hidden: false,
         processingJobId: null,
@@ -106,20 +154,20 @@ const processReel = async (reel: { id: string; shopId: string; videoUrl: string 
 
 const runOnce = async () => {
   const now = new Date();
-    const reels = await prisma.reel.findMany({
-      where: {
-        type: ReelType.VIDEO,
-        status: ReelStatus.PROCESSING,
-        expiresAt: { gte: now },
-        videoUrl: { not: null },
-        processingJobId: null,
-      },
+  const reels = await prisma.reel.findMany({
+    where: {
+      status: ReelStatus.PROCESSING,
+      expiresAt: { gte: now },
+      processingJobId: null,
+    },
     orderBy: { createdAt: 'desc' },
     take: BATCH_SIZE,
     select: {
       id: true,
       shopId: true,
+      type: true,
       videoUrl: true,
+      photoUrls: true,
       editorState: true,
     },
   });

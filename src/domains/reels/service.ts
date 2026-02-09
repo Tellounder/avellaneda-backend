@@ -101,8 +101,8 @@ export const createReel = async (
     }
   }
 
-  // All video reels are processed by the worker before publishing.
-  if (normalizedType === ReelType.VIDEO) {
+  // All reels are processed by the worker before publishing.
+  if (normalizedType === ReelType.VIDEO || normalizedType === ReelType.PHOTO_SET) {
     status = ReelStatus.PROCESSING;
   }
 

@@ -1,4 +1,5 @@
-﻿import { Request, Response } from 'express';
+import { Request, Response } from 'express';
+import { ReelStatus } from '@prisma/client';
 import * as ReelsService from './service';
 import { getWhatsappLimit } from '../shops/service';
 import { getOrSetCache } from '../../utils/publicCache';
@@ -7,7 +8,7 @@ const REELS_CACHE_MS = 15_000;
 
 const stripShopPrivateFields = (shop: any) => {
   if (!shop) return shop;
-  const { authUserId, requiresEmailFix, ...rest } = shop;
+  const { authUserId, requiresEmailFix, password, email, cuit, razonSocial, ...rest } = shop;
   return rest;
 };
 
@@ -86,7 +87,7 @@ export const createReel = async (req: Request, res: Response) => {
   if (req.auth.userType !== 'SHOP' && req.auth.userType !== 'ADMIN') {
     return res.status(403).json({ message: 'Permisos insuficientes.' });
   }
-  const { shopId, type, videoUrl, photoUrls, thumbnailUrl, durationSeconds, platform, status, processingJobId, presetLabel, editorState } = req.body;
+  const { shopId, type, videoUrl, photoUrls, thumbnailUrl, durationSeconds, platform, presetLabel, editorState } = req.body;
   const isAdminOverride =
     req.auth.userType === 'ADMIN' ? Boolean(req.body?.isAdminOverride ?? true) : false;
   const data = await ReelsService.createReel(
@@ -100,8 +101,8 @@ export const createReel = async (req: Request, res: Response) => {
       presetLabel,
       editorState,
       durationSeconds,
-      status,
-      processingJobId,
+      status: ReelStatus.PROCESSING,
+      processingJobId: null,
     },
     { isAdminOverride }
   );
@@ -134,3 +135,6 @@ export const registerView = async (req: Request, res: Response) => {
   const data = await ReelsService.registerView(req.params.id, req.auth.authUserId);
   res.json(data);
 };
+
+
+

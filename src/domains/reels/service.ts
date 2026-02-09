@@ -10,7 +10,6 @@ import {
 } from '@prisma/client';
 import prisma from './repo';
 import { createQuotaTransaction, reserveReelQuota } from '../../services/quota.service';
-import { consumeCompletedJob } from '../../services/reelsMedia.service';
 
 const normalizePlatform = (value: unknown): SocialPlatform => {
   if (value === 'Instagram' || value === 'TikTok' || value === 'Facebook' || value === 'YouTube') {
@@ -86,20 +85,11 @@ export const createReel = async (
   const photoUrls = Array.isArray(input.photoUrls) ? input.photoUrls.filter(Boolean) : [];
   let videoUrl = input.videoUrl?.trim() || null;
   const durationSeconds = clampDuration(input.durationSeconds, 10);
-  let status = input.status ?? ReelStatus.ACTIVE;
+  let status = ReelStatus.PROCESSING;
   let thumbnailUrl = input.thumbnailUrl || null;
   const presetLabelRaw = input.presetLabel?.trim() || '';
   const presetLabel = presetLabelRaw ? presetLabelRaw.slice(0, 48) : null;
   const editorState = input.editorState ?? null;
-
-  if (status === ReelStatus.PROCESSING && input.processingJobId) {
-    const processed = consumeCompletedJob(input.processingJobId);
-    if (processed) {
-      status = ReelStatus.ACTIVE;
-      videoUrl = processed.videoUrl;
-      thumbnailUrl = processed.thumbnailUrl;
-    }
-  }
 
   // All reels are processed by the worker before publishing.
   if (normalizedType === ReelType.VIDEO || normalizedType === ReelType.PHOTO_SET) {
@@ -139,7 +129,7 @@ export const createReel = async (
           platform: normalizedPlatform,
           hidden: false,
           views: 0,
-          processingJobId: status === ReelStatus.ACTIVE ? null : input.processingJobId || null,
+          processingJobId: null,
         },
         include: { shop: true },
       });
@@ -218,4 +208,6 @@ export const registerView = async (id: string, userId: string) => {
 
   return { reelId: id, userId };
 };
+
+
 

@@ -13,6 +13,18 @@ const BATCH_SIZE = Math.max(1, Number(process.env.REEL_WORKER_BATCH || 3));
 const INTERVAL_MS = Math.max(15_000, Number(process.env.REEL_WORKER_INTERVAL_MS || 60_000));
 const MAX_REDIRECTS = 3;
 
+const normalizeEditorState = (value: any) => {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return value;
+};
+
 const createTempDir = async () => {
   const base = path.join(os.tmpdir(), 'avellaneda-reels-worker');
   await fsPromises.mkdir(base, { recursive: true });
@@ -156,7 +168,7 @@ const runOnce = async () => {
   const now = new Date();
   const reels = await prisma.reel.findMany({
     where: {
-      status: ReelStatus.PROCESSING,
+      status: { in: [ReelStatus.PROCESSING, ReelStatus.ACTIVE] },
       expiresAt: { gte: now },
       processingJobId: null,
     },
@@ -169,13 +181,17 @@ const runOnce = async () => {
       videoUrl: true,
       photoUrls: true,
       editorState: true,
+      status: true,
     },
   });
 
-  for (const reel of reels) {
+  const candidates = reels
+    .map((reel) => ({ ...reel, editorState: normalizeEditorState(reel.editorState) }))
+    .filter((reel) => reel.status === ReelStatus.PROCESSING || (reel.editorState && reel.editorState.rendered !== true));
+
+  for (const reel of candidates) {
     await processReel(reel);
-  }
-};
+  };
 
 const start = async () => {
   console.log(`[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms`);
@@ -189,3 +205,6 @@ start().catch((error) => {
   console.error('[reels-worker] Error fatal:', error);
   process.exit(1);
 });
+
+
+

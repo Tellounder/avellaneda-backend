@@ -107,6 +107,10 @@ const processReel = async (reel: {
     if (reel.type === ReelType.VIDEO && reel.videoUrl) {
       const sourcePath = path.join(tempDir, 'source-video');
       await downloadToFile(reel.videoUrl, sourcePath);
+      const stat = await fsPromises.stat(sourcePath);
+      if (!stat.size) {
+        throw new Error(`Archivo descargado vacio (video): ${sourcePath}`);
+      }
       const { videoUrl, thumbnailUrl } = await processVideoFromPath(
         reel.shopId,
         sourcePath,
@@ -124,6 +128,10 @@ const processReel = async (reel: {
         const ext = getExtensionFromUrl(url) || '.jpg';
         const sourcePath = path.join(tempDir, `source-photo-${index}${ext}`);
         await downloadToFile(url, sourcePath);
+        const stat = await fsPromises.stat(sourcePath);
+        if (!stat.size) {
+          throw new Error(`Archivo descargado vacio (foto ${index}): ${sourcePath}`);
+        }
         const processedUrl = await processPhotoFromPath(
           reel.shopId,
           sourcePath,

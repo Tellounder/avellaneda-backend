@@ -151,6 +151,10 @@ export const processPhotoFromPath = async (
 ) => {
   ensureFfmpeg();
   await fs.mkdir(tempDir, { recursive: true });
+  const stat = await fs.stat(sourcePath);
+  if (!stat.isFile() || stat.size === 0) {
+    throw new Error(`Archivo fuente invalido o vacio: ${sourcePath}`);
+  }
   const outputName = `reel-photo-${mediaIndex}.jpg`;
   const { filter, outputLabel } = buildEditorFilter(editorState, mediaIndex);
 

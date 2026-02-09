@@ -150,12 +150,13 @@ export const processPhotoFromPath = async (
   mediaIndex = 0
 ) => {
   ensureFfmpeg();
+  await fs.mkdir(tempDir, { recursive: true });
   const outputName = `reel-photo-${mediaIndex}.jpg`;
-  const outputPath = path.join(tempDir, outputName);
   const { filter, outputLabel } = buildEditorFilter(editorState, mediaIndex);
 
-  await new Promise<void>((resolve, reject) => {
-    ffmpeg(sourcePath)
+  const buffer = await new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const command = ffmpeg(sourcePath)
       .complexFilter(filter, outputLabel)
       .outputOptions([
         '-map',
@@ -164,14 +165,22 @@ export const processPhotoFromPath = async (
         '1',
         '-q:v',
         '4',
+        '-f',
+        'image2pipe',
+        '-vcodec',
+        'mjpeg',
       ])
-      .output(outputPath)
-      .on('end', resolve)
-      .on('error', reject)
-      .run();
+      .on('error', reject);
+
+    const stream = command.pipe();
+    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
   });
 
-  const buffer = await fs.readFile(outputPath);
+  if (!buffer.length) {
+    throw new Error('No se pudo renderizar la imagen del reel.');
+  }
+
   return uploadBuffer(buildKey(shopId, outputName), buffer, 'image/jpeg');
 };
 
@@ -182,6 +191,7 @@ export const processVideoFromPath = async (
   editorState?: any
 ) => {
   ensureFfmpeg();
+  await fs.mkdir(tempDir, { recursive: true });
   const videoOutput = path.join(tempDir, 'reel-video.mp4');
   const thumbOutput = path.join(tempDir, 'reel-thumb.jpg');
   const { filter, outputLabel } = buildEditorFilter(editorState, 0);
@@ -209,6 +219,7 @@ export const processVideoFromPath = async (
         '-b:a',
         '128k',
         '-shortest',
+        '-y',
       ])
       .output(videoOutput)
       .on('end', resolve)

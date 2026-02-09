@@ -191,7 +191,8 @@ const runOnce = async () => {
 
   for (const reel of candidates) {
     await processReel(reel);
-  };
+  }
+};
 
 const start = async () => {
   console.log(`[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms`);

@@ -156,6 +156,13 @@ export const processPhotoFromPath = async (
 
   const buffer = await new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
+    const stderr: string[] = [];
+    const onError = (error: unknown) => {
+      const details = stderr.length ? `\nffmpeg:\n${stderr.join('\n')}` : '';
+      const message =
+        error instanceof Error ? `${error.message}${details}` : `Error procesando imagen.${details}`;
+      reject(new Error(message));
+    };
     const command = ffmpeg(sourcePath)
       .complexFilter(filter, outputLabel)
       .outputOptions([
@@ -170,15 +177,20 @@ export const processPhotoFromPath = async (
         '-vcodec',
         'mjpeg',
       ])
-      .on('error', reject);
+      .format('mjpeg')
+      .on('stderr', (line: string) => {
+        if (stderr.length < 20) stderr.push(line);
+      })
+      .on('error', onError);
 
     const stream = command.pipe();
     stream.on('data', (chunk: Buffer) => chunks.push(chunk));
     stream.on('end', () => resolve(Buffer.concat(chunks)));
+    stream.on('error', onError);
   });
 
   if (!buffer.length) {
-    throw new Error('No se pudo renderizar la imagen del reel.');
+    throw new Error('No se pudo renderizar la imagen del reel (sin salida).');
   }
 
   return uploadBuffer(buildKey(shopId, outputName), buffer, 'image/jpeg');

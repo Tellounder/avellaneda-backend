@@ -5,17 +5,14 @@ import crypto from 'crypto';
 import path from 'path';
 import os from 'os';
 import fs from 'fs/promises';
-import fsSync from 'fs';
 import ffmpegPath from 'ffmpeg-static';
+import sharp from 'sharp';
 // `fluent-ffmpeg` does not ship typings in our runtime path.
 const ffmpeg: any = require('fluent-ffmpeg');
 
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const reelsBucket = process.env.SUPABASE_REELS_BUCKET || 'reels';
-const fontFile = process.env.REEL_FONT_FILE || '';
-const resolvedFontFile =
-  fontFile && fsSync.existsSync(fontFile) ? fontFile : '';
 const TARGET_WIDTH = 720;
 const TARGET_HEIGHT = 1280;
 
@@ -77,27 +74,43 @@ const clampNumber = (value: number, min: number, max: number, fallback: number) 
   return Math.max(min, Math.min(max, value));
 };
 
-const escapeDrawText = (value: string) =>
-  value.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'");
+const escapeSvgText = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 
-const prepareEditorState = async (editorState: any, tempDir: string) => {
-  if (!editorState || !Array.isArray(editorState.stickers)) return editorState;
-  const stickers = await Promise.all(
-    editorState.stickers.map(async (sticker: any, index: number) => {
-      const text = String(sticker?.text || '').trim();
-      if (!text) return sticker;
-      const filePath = path.join(tempDir, `sticker-${index}.txt`);
-      await fs.writeFile(filePath, text, 'utf8');
-      return { ...sticker, textFile: filePath };
-    })
-  );
-  return { ...editorState, stickers };
+const buildStickerOverlay = async (editorState: any, tempDir: string) => {
+  if (!editorState || !Array.isArray(editorState.stickers)) return null;
+  const stickers = editorState.stickers.filter((sticker: any) => String(sticker?.text || '').trim());
+  if (!stickers.length) return null;
+
+  const elements = stickers.map((sticker: any) => {
+    const rawText = String(sticker?.text || '').trim();
+    const x = Math.round(clampNumber(Number(sticker.x), -2, 2, 0) * TARGET_WIDTH);
+    const y = Math.round(clampNumber(Number(sticker.y), -2, 2, 0) * TARGET_HEIGHT);
+    const scale = clampNumber(Number(sticker.scale ?? 1), 0.5, 3, 1);
+    const fontSize = Math.max(16, Math.round(42 * scale));
+    const color = String(sticker.color || '#ffffff');
+    const rotation = clampNumber(Number(sticker.rotation ?? 0), -180, 180, 0);
+    const text = escapeSvgText(rawText);
+    const transform = rotation ? ` transform="rotate(${rotation} ${x} ${y})"` : '';
+    return `<text x="${x}" y="${y}" fill="${color}" font-size="${fontSize}" font-family="Arial, sans-serif"${transform}>${text}</text>`;
+  });
+
+  const svg = `
+<svg xmlns="http://www.w3.org/2000/svg" width="${TARGET_WIDTH}" height="${TARGET_HEIGHT}" viewBox="0 0 ${TARGET_WIDTH} ${TARGET_HEIGHT}">
+  ${elements.join('\n')}
+</svg>`;
+
+  const overlayPath = path.join(tempDir, 'reel-overlay.png');
+  await sharp(Buffer.from(svg)).png().toFile(overlayPath);
+  return overlayPath;
 };
 
-const escapeDrawTextFile = (value: string) =>
-  escapeDrawText(value.replace(/\\/g, '/'));
-
-const buildEditorFilter = (editorState: any, mediaIndex = 0) => {
+const buildEditorFilter = (editorState: any, mediaIndex = 0, withOverlay = false) => {
   const baseFilter = `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
   let filter = `[0:v]${baseFilter}[base]`;
   let currentLabel = 'base';
@@ -117,40 +130,10 @@ const buildEditorFilter = (editorState: any, mediaIndex = 0) => {
     currentLabel = 'v0';
   }
 
-  const stickers = Array.isArray(editorState?.stickers) ? editorState.stickers : [];
-  const fontOption = resolvedFontFile
-    ? `fontfile='${escapeDrawText(resolvedFontFile)}'`
-    : '';
-
-  stickers.forEach((sticker: any, index: number) => {
-    const rawText = String(sticker?.text || '').trim();
-    if (!rawText) return;
-    const x = Math.round(clampNumber(Number(sticker.x), -2, 2, 0) * TARGET_WIDTH);
-    const y = Math.round(clampNumber(Number(sticker.y), -2, 2, 0) * TARGET_HEIGHT);
-    const scale = clampNumber(Number(sticker.scale ?? 1), 0.5, 3, 1);
-    const fontSize = Math.max(16, Math.round(42 * scale));
-    const color = String(sticker.color || '#ffffff').replace('#', '') || 'ffffff';
-    const textFile = sticker?.textFile ? escapeDrawTextFile(String(sticker.textFile)) : '';
-    const textOption = textFile
-      ? `textfile='${textFile}':reload=0`
-      : `text='${escapeDrawText(rawText)}'`;
-    const nextLabel = `vt${index}`;
-    const drawOptions = [
-      fontOption,
-      textOption,
-      `x=${x}`,
-      `y=${y}`,
-      `fontsize=${fontSize}`,
-      `fontcolor=${color}`,
-      'shadowcolor=black@0.45',
-      'shadowx=2',
-      'shadowy=2',
-    ]
-      .filter(Boolean)
-      .join(':');
-    filter += `;[${currentLabel}]drawtext=${drawOptions}[${nextLabel}]`;
-    currentLabel = nextLabel;
-  });
+  if (withOverlay) {
+    filter += `;[${currentLabel}][1:v]overlay=0:0[vout]`;
+    currentLabel = 'vout';
+  }
 
   if (currentLabel !== 'vout') {
     filter += `;[${currentLabel}]null[vout]`;
@@ -189,8 +172,8 @@ export const processPhotoFromPath = async (
     throw new Error(`Archivo fuente invalido o vacio: ${sourcePath}`);
   }
   const outputName = `reel-photo-${mediaIndex}.jpg`;
-  const safeEditorState = await prepareEditorState(editorState, tempDir);
-  const { filter, outputLabel } = buildEditorFilter(safeEditorState, mediaIndex);
+  const overlayPath = await buildStickerOverlay(editorState, tempDir);
+  const { filter, outputLabel } = buildEditorFilter(editorState, mediaIndex, Boolean(overlayPath));
 
   const outputPath = path.join(tempDir, outputName);
   const stderr: string[] = [];
@@ -202,7 +185,11 @@ export const processPhotoFromPath = async (
         error instanceof Error ? `${error.message}${details}` : `Error procesando imagen.${details}`;
       reject(new Error(message));
     };
-    ffmpeg(sourcePath)
+    const command = ffmpeg(sourcePath);
+    if (overlayPath) {
+      command.input(overlayPath);
+    }
+    command
       .complexFilter(filter)
       .outputOptions([
         '-map',
@@ -243,11 +230,15 @@ export const processVideoFromPath = async (
   await fs.mkdir(tempDir, { recursive: true });
   const videoOutput = path.join(tempDir, 'reel-video.mp4');
   const thumbOutput = path.join(tempDir, 'reel-thumb.jpg');
-  const safeEditorState = await prepareEditorState(editorState, tempDir);
-  const { filter, outputLabel } = buildEditorFilter(safeEditorState, 0);
+  const overlayPath = await buildStickerOverlay(editorState, tempDir);
+  const { filter, outputLabel } = buildEditorFilter(editorState, 0, Boolean(overlayPath));
 
   await new Promise<void>((resolve, reject) => {
-    ffmpeg(sourcePath)
+    const command = ffmpeg(sourcePath);
+    if (overlayPath) {
+      command.input(overlayPath).inputOptions(['-loop', '1']);
+    }
+    command
       .complexFilter(filter)
       .outputOptions([
         '-map',

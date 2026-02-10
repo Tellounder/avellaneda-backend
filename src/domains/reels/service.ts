@@ -18,7 +18,41 @@ const normalizePlatform = (value: unknown): SocialPlatform => {
   return 'Instagram';
 };
 
-export const getActiveReels = async () => {
+const SHOP_PUBLIC_SELECT = {
+  id: true,
+  name: true,
+  slug: true,
+  logoUrl: true,
+  coverUrl: true,
+  website: true,
+  address: true,
+  addressDetails: true,
+  socialHandles: true,
+  whatsappLines: true,
+  plan: true,
+} as const;
+
+const REEL_PUBLIC_SELECT = {
+  id: true,
+  shopId: true,
+  type: true,
+  videoUrl: true,
+  photoUrls: true,
+  thumbnailUrl: true,
+  presetLabel: true,
+  editorState: true,
+  durationSeconds: true,
+  status: true,
+  processingJobId: true,
+  platform: true,
+  hidden: true,
+  views: true,
+  createdAt: true,
+  expiresAt: true,
+  shop: { select: SHOP_PUBLIC_SELECT },
+} as const;
+
+export const getActiveReels = async (limit = 80) => {
   const now = new Date();
   return prisma.reel.findMany({
     where: {
@@ -27,29 +61,31 @@ export const getActiveReels = async () => {
       expiresAt: { gte: now },
     },
     orderBy: { createdAt: 'desc' },
-    include: { shop: true },
+    take: limit,
+    select: REEL_PUBLIC_SELECT,
   });
 };
 
 export const getAllReelsAdmin = async () => {
   return prisma.reel.findMany({
     orderBy: { createdAt: 'desc' },
-    include: { shop: true },
+    select: REEL_PUBLIC_SELECT,
   });
 };
 
-export const getReelsByShop = async (shopId: string) => {
+export const getReelsByShop = async (shopId: string, limit = 120) => {
   return prisma.reel.findMany({
     where: { shopId },
     orderBy: { createdAt: 'desc' },
-    include: { shop: true },
+    take: limit,
+    select: REEL_PUBLIC_SELECT,
   });
 };
 
 export const getReelById = async (id: string) => {
   return prisma.reel.findUnique({
     where: { id },
-    include: { shop: true },
+    select: REEL_PUBLIC_SELECT,
   });
 };
 
@@ -131,7 +167,7 @@ export const createReel = async (
           views: 0,
           processingJobId: null,
         },
-        include: { shop: true },
+        select: REEL_PUBLIC_SELECT,
       });
 
       if (reservation) {
@@ -164,7 +200,7 @@ export const hideReel = async (id: string) => {
   return prisma.reel.update({
     where: { id },
     data: { hidden: true, status: ReelStatus.HIDDEN },
-    include: { shop: true },
+    select: REEL_PUBLIC_SELECT,
   });
 };
 
@@ -172,7 +208,7 @@ export const reactivateReel = async (id: string) => {
   return prisma.reel.update({
     where: { id },
     data: { hidden: false, status: ReelStatus.ACTIVE },
-    include: { shop: true },
+    select: REEL_PUBLIC_SELECT,
   });
 };
 
@@ -181,7 +217,7 @@ export const deleteReel = async (id: string) => {
     await tx.reelView.deleteMany({ where: { reelId: id } });
     return tx.reel.delete({
       where: { id },
-      include: { shop: true },
+      select: REEL_PUBLIC_SELECT,
     });
   });
 };

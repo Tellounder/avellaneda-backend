@@ -224,7 +224,8 @@ export const processVideoFromPath = async (
   shopId: string,
   sourcePath: string,
   tempDir: string,
-  editorState?: any
+  editorState?: any,
+  onProgress?: (progress: number) => void
 ) => {
   ensureFfmpeg();
   await fs.mkdir(tempDir, { recursive: true });
@@ -263,6 +264,12 @@ export const processVideoFromPath = async (
         '-y',
       ])
       .output(videoOutput)
+      .on('progress', (progress: { percent?: number }) => {
+        const percent = Number(progress?.percent);
+        if (Number.isFinite(percent)) {
+          onProgress?.(percent);
+        }
+      })
       .on('end', resolve)
       .on('error', reject)
       .run();

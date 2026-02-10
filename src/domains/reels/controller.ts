@@ -6,10 +6,60 @@ import { getOrSetCache } from '../../utils/publicCache';
 
 const REELS_CACHE_MS = 15_000;
 
+const sanitizeAddressDetails = (details: any) => {
+  if (!details || typeof details !== 'object') return details;
+  const {
+    lat,
+    lng,
+    zip,
+    city,
+    number,
+    street,
+    province,
+    mapsUrl,
+    catalogUrl,
+  } = details;
+  return {
+    ...(lat !== undefined ? { lat } : {}),
+    ...(lng !== undefined ? { lng } : {}),
+    ...(zip ? { zip } : {}),
+    ...(city ? { city } : {}),
+    ...(number ? { number } : {}),
+    ...(street ? { street } : {}),
+    ...(province ? { province } : {}),
+    ...(mapsUrl ? { mapsUrl } : {}),
+    ...(catalogUrl ? { catalogUrl } : {}),
+  };
+};
+
 const stripShopPrivateFields = (shop: any) => {
   if (!shop) return shop;
-  const { authUserId, requiresEmailFix, password, email, cuit, razonSocial, ...rest } = shop;
-  return rest;
+  const {
+    id,
+    name,
+    slug,
+    logoUrl,
+    coverUrl,
+    website,
+    address,
+    addressDetails,
+    socialHandles,
+    whatsappLines,
+    plan,
+  } = shop;
+  return {
+    id,
+    name,
+    slug,
+    logoUrl,
+    coverUrl,
+    website,
+    address,
+    addressDetails: sanitizeAddressDetails(addressDetails),
+    socialHandles,
+    whatsappLines,
+    plan,
+  };
 };
 
 const applyWhatsappPrivacy = (shop: any, req: Request) => {
@@ -63,7 +113,14 @@ const resolveReelAccess = async (req: Request, res: Response) => {
 };
 
 export const getActiveReels = async (req: Request, res: Response) => {
-  const data = await getOrSetCache('reels:active', REELS_CACHE_MS, () => ReelsService.getActiveReels());
+  const limit = Math.min(
+    120,
+    Math.max(10, Number.parseInt(String(req.query.limit || '80'), 10) || 80)
+  );
+  const cacheKey = `reels:active:${limit}`;
+  const data = await getOrSetCache(cacheKey, REELS_CACHE_MS, () =>
+    ReelsService.getActiveReels(limit)
+  );
   res.json(sanitizeReelPayload(data, req));
 };
 
@@ -73,7 +130,11 @@ export const getAllReelsAdmin = async (req: Request, res: Response) => {
 };
 
 export const getReelsByShop = async (req: Request, res: Response) => {
-  const data = await ReelsService.getReelsByShop(req.params.shopId);
+  const limit = Math.min(
+    200,
+    Math.max(10, Number.parseInt(String(req.query.limit || '120'), 10) || 120)
+  );
+  const data = await ReelsService.getReelsByShop(req.params.shopId, limit);
   res.json(sanitizeReelPayload(data, req));
 };
 

@@ -73,6 +73,15 @@ const claimReel = async (reelId: string, jobId: string) => {
   return updated.count === 1;
 };
 
+const buildEditorStateWithProgress = (base: any, progress: number) => {
+  const normalized =
+    base && typeof base === 'object'
+      ? { ...base }
+      : { version: 1, mediaTransforms: [], stickers: [] };
+  normalized.progress = progress;
+  return normalized;
+};
+
 const getExtensionFromUrl = (url: string) => {
   try {
     const pathname = new URL(url).pathname;
@@ -99,10 +108,30 @@ const processReel = async (reel: {
   if (!claimed) return;
 
   const tempDir = await createTempDir();
+  const progressState = { last: -1, lastAt: 0 };
+  const baseEditorState = reel.editorState && typeof reel.editorState === 'object' ? reel.editorState : null;
+
+  const reportProgress = async (value: number) => {
+    const next = Math.max(0, Math.min(100, Math.round(value)));
+    const now = Date.now();
+    if (next === progressState.last) return;
+    if (next < 100 && next - progressState.last < 4 && now - progressState.lastAt < 1500) {
+      return;
+    }
+    progressState.last = next;
+    progressState.lastAt = now;
+    const editorState = buildEditorStateWithProgress(baseEditorState, next);
+    await prisma.reel.updateMany({
+      where: { id: reel.id, processingJobId: jobId },
+      data: { editorState },
+    });
+  };
   try {
     let nextVideoUrl: string | null = null;
     let nextThumbUrl: string | null = null;
     let nextPhotoUrls: string[] = [];
+
+    await reportProgress(0);
 
     if (reel.type === ReelType.VIDEO && reel.videoUrl) {
       const sourcePath = path.join(tempDir, 'source-video');
@@ -115,13 +144,17 @@ const processReel = async (reel: {
         reel.shopId,
         sourcePath,
         tempDir,
-        reel.editorState
+        reel.editorState,
+        (percent) => {
+          void reportProgress(percent);
+        }
       );
       nextVideoUrl = videoUrl;
       nextThumbUrl = thumbnailUrl;
     }
 
     if (reel.type === ReelType.PHOTO_SET) {
+      const totalPhotos = Math.max(1, reel.photoUrls.length);
       for (let index = 0; index < reel.photoUrls.length; index += 1) {
         const url = reel.photoUrls[index];
         if (!url) continue;
@@ -140,14 +173,15 @@ const processReel = async (reel: {
           index
         );
         nextPhotoUrls.push(processedUrl);
+        await reportProgress(((index + 1) / totalPhotos) * 100);
       }
       nextThumbUrl = nextPhotoUrls[0] || null;
     }
 
     const nextEditorState =
       reel.editorState && typeof reel.editorState === 'object'
-        ? { ...reel.editorState, rendered: true, renderedAt: new Date().toISOString() }
-        : reel.editorState;
+        ? { ...reel.editorState, rendered: true, renderedAt: new Date().toISOString(), progress: 100 }
+        : buildEditorStateWithProgress(null, 100);
     await prisma.reel.update({
       where: { id: reel.id },
       data: {

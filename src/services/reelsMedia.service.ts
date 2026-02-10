@@ -169,7 +169,7 @@ export const processPhotoFromPath = async (
       reject(new Error(message));
     };
     ffmpeg(sourcePath)
-      .complexFilter(filter, outputLabel)
+      .complexFilter(filter)
       .outputOptions([
         '-map',
         `[${outputLabel}]`,
@@ -213,7 +213,7 @@ export const processVideoFromPath = async (
 
   await new Promise<void>((resolve, reject) => {
     ffmpeg(sourcePath)
-      .complexFilter(filter, outputLabel)
+      .complexFilter(filter)
       .outputOptions([
         '-map',
         `[${outputLabel}]`,

@@ -80,6 +80,23 @@ const clampNumber = (value: number, min: number, max: number, fallback: number) 
 const escapeDrawText = (value: string) =>
   value.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'");
 
+const prepareEditorState = async (editorState: any, tempDir: string) => {
+  if (!editorState || !Array.isArray(editorState.stickers)) return editorState;
+  const stickers = await Promise.all(
+    editorState.stickers.map(async (sticker: any, index: number) => {
+      const text = String(sticker?.text || '').trim();
+      if (!text) return sticker;
+      const filePath = path.join(tempDir, `sticker-${index}.txt`);
+      await fs.writeFile(filePath, text, 'utf8');
+      return { ...sticker, textFile: filePath };
+    })
+  );
+  return { ...editorState, stickers };
+};
+
+const escapeDrawTextFile = (value: string) =>
+  escapeDrawText(value.replace(/\\/g, '/'));
+
 const buildEditorFilter = (editorState: any, mediaIndex = 0) => {
   const baseFilter = `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
   let filter = `[0:v]${baseFilter}[base]`;
@@ -113,9 +130,13 @@ const buildEditorFilter = (editorState: any, mediaIndex = 0) => {
     const scale = clampNumber(Number(sticker.scale ?? 1), 0.5, 3, 1);
     const fontSize = Math.max(16, Math.round(42 * scale));
     const color = String(sticker.color || '#ffffff').replace('#', '') || 'ffffff';
-    const text = escapeDrawText(rawText);
+    const textFile = sticker?.textFile ? escapeDrawTextFile(String(sticker.textFile)) : '';
+    const text =
+      textFile
+        ? `:textfile='${textFile}':reload=0`
+        : `:text='${escapeDrawText(rawText)}'`;
     const nextLabel = `vt${index}`;
-    filter += `;[${currentLabel}]drawtext${fontOption}:text='${text}':x=${x}:y=${y}:fontsize=${fontSize}:fontcolor=${color}:shadowcolor=black@0.45:shadowx=2:shadowy=2[${nextLabel}]`;
+    filter += `;[${currentLabel}]drawtext${fontOption}${text}:x=${x}:y=${y}:fontsize=${fontSize}:fontcolor=${color}:shadowcolor=black@0.45:shadowx=2:shadowy=2[${nextLabel}]`;
     currentLabel = nextLabel;
   });
 
@@ -156,7 +177,8 @@ export const processPhotoFromPath = async (
     throw new Error(`Archivo fuente invalido o vacio: ${sourcePath}`);
   }
   const outputName = `reel-photo-${mediaIndex}.jpg`;
-  const { filter, outputLabel } = buildEditorFilter(editorState, mediaIndex);
+  const safeEditorState = await prepareEditorState(editorState, tempDir);
+  const { filter, outputLabel } = buildEditorFilter(safeEditorState, mediaIndex);
 
   const outputPath = path.join(tempDir, outputName);
   const stderr: string[] = [];
@@ -209,7 +231,8 @@ export const processVideoFromPath = async (
   await fs.mkdir(tempDir, { recursive: true });
   const videoOutput = path.join(tempDir, 'reel-video.mp4');
   const thumbOutput = path.join(tempDir, 'reel-thumb.jpg');
-  const { filter, outputLabel } = buildEditorFilter(editorState, 0);
+  const safeEditorState = await prepareEditorState(editorState, tempDir);
+  const { filter, outputLabel } = buildEditorFilter(safeEditorState, 0);
 
   await new Promise<void>((resolve, reject) => {
     ffmpeg(sourcePath)

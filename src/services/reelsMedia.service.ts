@@ -158,16 +158,17 @@ export const processPhotoFromPath = async (
   const outputName = `reel-photo-${mediaIndex}.jpg`;
   const { filter, outputLabel } = buildEditorFilter(editorState, mediaIndex);
 
-  const buffer = await new Promise<Buffer>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    const stderr: string[] = [];
+  const outputPath = path.join(tempDir, outputName);
+  const stderr: string[] = [];
+
+  await new Promise<void>((resolve, reject) => {
     const onError = (error: unknown) => {
       const details = stderr.length ? `\nffmpeg:\n${stderr.join('\n')}` : '';
       const message =
         error instanceof Error ? `${error.message}${details}` : `Error procesando imagen.${details}`;
       reject(new Error(message));
     };
-    const command = ffmpeg(sourcePath)
+    ffmpeg(sourcePath)
       .complexFilter(filter, outputLabel)
       .outputOptions([
         '-map',
@@ -176,25 +177,23 @@ export const processPhotoFromPath = async (
         '1',
         '-q:v',
         '4',
-        '-f',
-        'image2pipe',
-        '-vcodec',
-        'mjpeg',
+        '-update',
+        '1',
+        '-y',
       ])
-      .format('mjpeg')
+      .output(outputPath)
       .on('stderr', (line: string) => {
         if (stderr.length < 20) stderr.push(line);
       })
-      .on('error', onError);
-
-    const stream = command.pipe();
-    stream.on('data', (chunk: Buffer) => chunks.push(chunk));
-    stream.on('end', () => resolve(Buffer.concat(chunks)));
-    stream.on('error', onError);
+      .on('end', resolve)
+      .on('error', onError)
+      .run();
   });
 
+  const buffer = await fs.readFile(outputPath);
   if (!buffer.length) {
-    throw new Error('No se pudo renderizar la imagen del reel (sin salida).');
+    const details = stderr.length ? `\nffmpeg:\n${stderr.join('\n')}` : '';
+    throw new Error(`No se pudo renderizar la imagen del reel (sin salida).${details}`);
   }
 
   return uploadBuffer(buildKey(shopId, outputName), buffer, 'image/jpeg');

@@ -119,7 +119,7 @@ const buildEditorFilter = (editorState: any, mediaIndex = 0) => {
 
   const stickers = Array.isArray(editorState?.stickers) ? editorState.stickers : [];
   const fontOption = resolvedFontFile
-    ? `:fontfile='${escapeDrawText(resolvedFontFile)}'`
+    ? `fontfile='${escapeDrawText(resolvedFontFile)}'`
     : '';
 
   stickers.forEach((sticker: any, index: number) => {
@@ -131,12 +131,24 @@ const buildEditorFilter = (editorState: any, mediaIndex = 0) => {
     const fontSize = Math.max(16, Math.round(42 * scale));
     const color = String(sticker.color || '#ffffff').replace('#', '') || 'ffffff';
     const textFile = sticker?.textFile ? escapeDrawTextFile(String(sticker.textFile)) : '';
-    const text =
-      textFile
-        ? `:textfile='${textFile}':reload=0`
-        : `:text='${escapeDrawText(rawText)}'`;
+    const textOption = textFile
+      ? `textfile='${textFile}':reload=0`
+      : `text='${escapeDrawText(rawText)}'`;
     const nextLabel = `vt${index}`;
-    filter += `;[${currentLabel}]drawtext${fontOption}${text}:x=${x}:y=${y}:fontsize=${fontSize}:fontcolor=${color}:shadowcolor=black@0.45:shadowx=2:shadowy=2[${nextLabel}]`;
+    const drawOptions = [
+      fontOption,
+      textOption,
+      `x=${x}`,
+      `y=${y}`,
+      `fontsize=${fontSize}`,
+      `fontcolor=${color}`,
+      'shadowcolor=black@0.45',
+      'shadowx=2',
+      'shadowy=2',
+    ]
+      .filter(Boolean)
+      .join(':');
+    filter += `;[${currentLabel}]drawtext=${drawOptions}[${nextLabel}]`;
     currentLabel = nextLabel;
   });
 

@@ -131,13 +131,12 @@ const buildEditorFilter = (editorState: any, mediaIndex = 0, withOverlay = false
   }
 
   if (withOverlay) {
-    filter += `;[${currentLabel}][1:v]overlay=0:0[vout]`;
-    currentLabel = 'vout';
+    filter += `;[${currentLabel}][1:v]overlay=0:0[v1]`;
+    currentLabel = 'v1';
   }
 
-  if (currentLabel !== 'vout') {
-    filter += `;[${currentLabel}]null[vout]`;
-  }
+  // Ensure final crop to the exact canvas to avoid overflow in the story viewer.
+  filter += `;[${currentLabel}]crop=${TARGET_WIDTH}:${TARGET_HEIGHT}:0:0[vout]`;
 
   return { filter, outputLabel: 'vout' };
 };

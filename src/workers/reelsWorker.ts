@@ -229,7 +229,12 @@ const runOnce = async () => {
 
   const candidates = reels
     .map((reel) => ({ ...reel, editorState: normalizeEditorState(reel.editorState) }))
-    .filter((reel) => reel.status === ReelStatus.PROCESSING || (reel.editorState && reel.editorState.rendered !== true));
+    .filter(
+      (reel) =>
+        reel.status === ReelStatus.PROCESSING ||
+        !reel.editorState ||
+        reel.editorState.rendered !== true
+    );
 
   for (const reel of candidates) {
     await processReel(reel);

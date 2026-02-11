@@ -227,17 +227,60 @@ const buildWhatsappLines = (input: unknown) => {
 };
 
 
-const shopInclude = {
+const shopSelectBase = {
+  id: true,
+  name: true,
+  slug: true,
+  logoUrl: true,
+  coverUrl: true,
+  website: true,
+  razonSocial: true,
+  cuit: true,
+  email: true,
+  address: true,
+  addressDetails: true,
+  minimumPurchase: true,
+  paymentMethods: true,
+  plan: true,
+  status: true,
+  statusReason: true,
+  statusChangedAt: true,
+  ownerAcceptedAt: true,
+  agendaSuspendedUntil: true,
+  agendaSuspendedByAdminId: true,
+  agendaSuspendedReason: true,
+  streamQuota: true,
+  reelQuota: true,
+  active: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
+const shopPublicSelect = {
+  ...shopSelectBase,
+  socialHandles: {
+    select: {
+      platform: true,
+      handle: true,
+    },
+  },
+  whatsappLines: {
+    select: {
+      label: true,
+      number: true,
+    },
+  },
+} as const;
+
+const shopPrivateSelect = {
+  ...shopSelectBase,
+  authUserId: true,
+  requiresEmailFix: true,
   socialHandles: true,
   whatsappLines: true,
   penalties: true,
   quotaWallet: true,
-};
-
-const shopPublicInclude = {
-  socialHandles: true,
-  whatsappLines: true,
-};
+} as const;
 
 const FEATURED_TIME_ZONE = 'America/Argentina/Buenos_Aires';
 const FEATURED_DEFAULT_LIMIT = Number(process.env.FEATURED_DEFAULT_LIMIT || 40);
@@ -353,7 +396,7 @@ export const getShops = async (options?: { limit?: number; offset?: number }) =>
   const pagination = { take: limit, skip: offset };
   const shops = await prisma.shop.findMany({
     orderBy: { name: 'asc' },
-    include: shopInclude,
+    select: shopPrivateSelect,
     ...pagination,
   });
   const ratings = await getShopRatingsMap();
@@ -379,7 +422,7 @@ export const getPublicShops = async (options?: { limit?: number; offset?: number
       status: ShopStatus.ACTIVE,
     },
     orderBy: { name: 'asc' },
-    include: shopPublicInclude,
+    select: shopPublicSelect,
     take: limit,
     skip: limit ? offset : undefined,
   });
@@ -420,7 +463,7 @@ export const getPublicShopsByLetter = async (
       },
     },
     orderBy: { name: 'asc' },
-    include: shopPublicInclude,
+    select: shopPublicSelect,
     skip: offset,
     take: safeLimit + 1,
   });
@@ -451,7 +494,7 @@ export const getFeaturedShops = async (options?: { limit?: number; referenceDate
     const shops = await prisma.shop.findMany({
       where,
       orderBy: { name: 'asc' },
-      include: shopPublicInclude,
+      select: shopPublicSelect,
     });
     const ratings = await getShopRatingsMap();
     return shops.map((shop) => {
@@ -472,7 +515,7 @@ export const getFeaturedShops = async (options?: { limit?: number; referenceDate
     orderBy: { name: 'asc' },
     skip: offset,
     take: firstTake,
-    include: shopPublicInclude,
+    select: shopPublicSelect,
   });
   let featured = firstBatch;
   if (featured.length < limit) {
@@ -482,7 +525,7 @@ export const getFeaturedShops = async (options?: { limit?: number; referenceDate
       orderBy: { name: 'asc' },
       skip: 0,
       take: remaining,
-      include: shopPublicInclude,
+      select: shopPublicSelect,
     });
     featured = featured.concat(secondBatch);
   }
@@ -513,7 +556,7 @@ export const getShopsByLetter = async (options: { letter: string; limit?: number
     orderBy: { name: 'asc' },
     skip: offset,
     take: safeLimit + 1,
-    include: shopInclude,
+    select: shopPrivateSelect,
   });
   const hasMore = shops.length > safeLimit;
   const slice = shops.slice(0, safeLimit);
@@ -532,11 +575,7 @@ export const getShopsByLetter = async (options: { letter: string; limit?: number
 export const getShopById = async (id: string) => {
   const shop = await prisma.shop.findUnique({
     where: { id },
-    include: {
-      streams: true,
-      reels: true,
-      ...shopInclude,
-    },
+    select: shopPrivateSelect,
   });
   if (!shop) {
     return shop;

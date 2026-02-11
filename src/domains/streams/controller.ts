@@ -1,30 +1,74 @@
 ﻿import { Request, Response } from 'express';
 import * as StreamsService from './service';
-import { getWhatsappLimit } from '../shops/service';
 import { getOrSetCache } from '../../utils/publicCache';
 
 const STREAMS_CACHE_MS = 15_000;
 
-const stripShopPrivateFields = (shop: any) => {
-  if (!shop) return shop;
-  const { authUserId, requiresEmailFix, ...rest } = shop;
-  return rest;
+const sanitizeAddressDetails = (details: any) => {
+  if (!details || typeof details !== 'object') return null;
+  const { lat, lng, mapsUrl, catalogUrl } = details;
+  return {
+    ...(lat !== undefined ? { lat } : {}),
+    ...(lng !== undefined ? { lng } : {}),
+    ...(mapsUrl ? { mapsUrl } : {}),
+    ...(catalogUrl ? { catalogUrl } : {}),
+  };
 };
 
-const applyWhatsappPrivacy = (shop: any, req: Request) => {
+const sanitizeSocialHandles = (handles: any) =>
+  Array.isArray(handles)
+    ? handles
+        .map((handle) => ({
+          platform: handle?.platform,
+          handle: handle?.handle,
+        }))
+        .filter((handle) => handle.platform && handle.handle)
+    : [];
+
+const sanitizeWhatsappLines = (lines: any) =>
+  Array.isArray(lines)
+    ? lines
+        .map((line) => ({
+          label: line?.label,
+          number: line?.number,
+        }))
+        .filter((line) => line.label && line.number)
+    : [];
+
+const sanitizeStreamShop = (shop: any) => {
   if (!shop) return shop;
-  const lines = Array.isArray(shop.whatsappLines) ? shop.whatsappLines : [];
+  return {
+    id: shop.id,
+    name: shop.name,
+    slug: shop.slug,
+    logoUrl: shop.logoUrl ?? null,
+    coverUrl: shop.coverUrl ?? null,
+    website: shop.website ?? null,
+    address: shop.address ?? null,
+    addressDetails: sanitizeAddressDetails(shop.addressDetails),
+    minimumPurchase: shop.minimumPurchase ?? 0,
+    paymentMethods: Array.isArray(shop.paymentMethods) ? shop.paymentMethods : [],
+    plan: shop.plan,
+    status: shop.status,
+    active: Boolean(shop.active),
+    socialHandles: sanitizeSocialHandles(shop.socialHandles),
+    whatsappLines: sanitizeWhatsappLines(shop.whatsappLines),
+  };
+};
+
+const applyVisibilityRules = (shop: any, req: Request) => {
+  if (!shop) return shop;
+  const safeShop = sanitizeStreamShop(shop);
   if (!req.auth) {
-    return { ...shop, whatsappLines: [] };
+    return { ...safeShop, whatsappLines: [], socialHandles: [] };
   }
   if (req.auth.userType === 'ADMIN') {
-    return shop;
+    return safeShop;
   }
   if (req.auth.userType === 'SHOP' && req.auth.shopId === shop.id) {
-    return shop;
+    return safeShop;
   }
-  const limit = getWhatsappLimit(shop.plan);
-  return { ...shop, whatsappLines: lines.slice(0, limit) };
+  return safeShop;
 };
 
 const sanitizeStreamPayload = (payload: any, req: Request) => {
@@ -33,7 +77,7 @@ const sanitizeStreamPayload = (payload: any, req: Request) => {
     if (!stream) return stream;
     const next = { ...stream };
     if (stream.shop) {
-      next.shop = applyWhatsappPrivacy(stripShopPrivateFields(stream.shop), req);
+      next.shop = applyVisibilityRules(stream.shop, req);
     }
     return next;
   };

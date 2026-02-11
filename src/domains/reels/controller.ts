@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import { ReelStatus } from '@prisma/client';
 import * as ReelsService from './service';
-import { getWhatsappLimit } from '../shops/service';
 import { getOrSetCache } from '../../utils/publicCache';
 
 const REELS_CACHE_MS = 15_000;
@@ -11,28 +10,18 @@ const sanitizeAddressDetails = (details: any) => {
   const {
     lat,
     lng,
-    zip,
-    city,
-    number,
-    street,
-    province,
     mapsUrl,
     catalogUrl,
   } = details;
   return {
     ...(lat !== undefined ? { lat } : {}),
     ...(lng !== undefined ? { lng } : {}),
-    ...(zip ? { zip } : {}),
-    ...(city ? { city } : {}),
-    ...(number ? { number } : {}),
-    ...(street ? { street } : {}),
-    ...(province ? { province } : {}),
     ...(mapsUrl ? { mapsUrl } : {}),
     ...(catalogUrl ? { catalogUrl } : {}),
   };
 };
 
-const stripShopPrivateFields = (shop: any) => {
+const sanitizeShopForReel = (shop: any) => {
   if (!shop) return shop;
   const {
     id,
@@ -41,11 +30,7 @@ const stripShopPrivateFields = (shop: any) => {
     logoUrl,
     coverUrl,
     website,
-    address,
     addressDetails,
-    socialHandles,
-    whatsappLines,
-    plan,
   } = shop;
   return {
     id,
@@ -54,37 +39,26 @@ const stripShopPrivateFields = (shop: any) => {
     logoUrl,
     coverUrl,
     website,
-    address,
     addressDetails: sanitizeAddressDetails(addressDetails),
-    socialHandles,
-    whatsappLines,
-    plan,
   };
 };
 
-const applyWhatsappPrivacy = (shop: any, req: Request) => {
-  if (!shop) return shop;
-  const lines = Array.isArray(shop.whatsappLines) ? shop.whatsappLines : [];
-  if (!req.auth) {
-    return { ...shop, whatsappLines: [] };
-  }
-  if (req.auth.userType === 'ADMIN') {
-    return shop;
-  }
-  if (req.auth.userType === 'SHOP' && req.auth.shopId === shop.id) {
-    return shop;
-  }
-  const limit = getWhatsappLimit(shop.plan);
-  return { ...shop, whatsappLines: lines.slice(0, limit) };
-};
-
-const sanitizeReelPayload = (payload: any, req: Request) => {
+const sanitizeReelPayload = (
+  payload: any,
+  options?: { stripEditorState?: boolean; stripProcessingFields?: boolean }
+) => {
   if (!payload) return payload;
   const sanitizeOne = (reel: any) => {
     if (!reel) return reel;
     const next = { ...reel };
     if (reel.shop) {
-      next.shop = applyWhatsappPrivacy(stripShopPrivateFields(reel.shop), req);
+      next.shop = sanitizeShopForReel(reel.shop);
+    }
+    if (options?.stripEditorState) {
+      delete next.editorState;
+    }
+    if (options?.stripProcessingFields) {
+      delete next.processingJobId;
     }
     return next;
   };
@@ -121,12 +95,17 @@ export const getActiveReels = async (req: Request, res: Response) => {
   const data = await getOrSetCache(cacheKey, REELS_CACHE_MS, () =>
     ReelsService.getActiveReels(limit)
   );
-  res.json(sanitizeReelPayload(data, req));
+  res.json(
+    sanitizeReelPayload(data, {
+      stripEditorState: true,
+      stripProcessingFields: true,
+    })
+  );
 };
 
 export const getAllReelsAdmin = async (req: Request, res: Response) => {
   const data = await ReelsService.getAllReelsAdmin();
-  res.json(sanitizeReelPayload(data, req));
+  res.json(sanitizeReelPayload(data));
 };
 
 export const getReelsByShop = async (req: Request, res: Response) => {
@@ -135,7 +114,18 @@ export const getReelsByShop = async (req: Request, res: Response) => {
     Math.max(10, Number.parseInt(String(req.query.limit || '120'), 10) || 120)
   );
   const data = await ReelsService.getReelsByShop(req.params.shopId, limit);
-  res.json(sanitizeReelPayload(data, req));
+  res.json(
+    sanitizeReelPayload(data, {
+      stripEditorState: true,
+      stripProcessingFields: true,
+    })
+  );
+};
+
+export const getReelById = async (req: Request, res: Response) => {
+  const reel = await resolveReelAccess(req, res);
+  if (!reel) return;
+  res.json(sanitizeReelPayload(reel));
 };
 
 export const createReel = async (req: Request, res: Response) => {
@@ -167,26 +157,26 @@ export const createReel = async (req: Request, res: Response) => {
     },
     { isAdminOverride }
   );
-  res.json(sanitizeReelPayload(data, req));
+  res.json(sanitizeReelPayload(data));
 };
 
 export const hideReel = async (req: Request, res: Response) => {
   const reel = await resolveReelAccess(req, res);
   if (!reel) return;
   const data = await ReelsService.hideReel(reel.id);
-  res.json(sanitizeReelPayload(data, req));
+  res.json(sanitizeReelPayload(data));
 };
 
 export const reactivateReel = async (req: Request, res: Response) => {
   const data = await ReelsService.reactivateReel(req.params.id);
-  res.json(sanitizeReelPayload(data, req));
+  res.json(sanitizeReelPayload(data));
 };
 
 export const deleteReel = async (req: Request, res: Response) => {
   const reel = await resolveReelAccess(req, res);
   if (!reel) return;
   const data = await ReelsService.deleteReel(reel.id);
-  res.json(sanitizeReelPayload(data, req));
+  res.json(sanitizeReelPayload(data));
 };
 
 export const registerView = async (req: Request, res: Response) => {

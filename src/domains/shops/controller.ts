@@ -7,35 +7,117 @@ const SHOPS_MAP_CACHE_MS = 120_000;
 const FEATURED_SHOPS_CACHE_MS = 60_000;
 const LETTER_SHOPS_CACHE_MS = 120_000;
 
-const stripShopPrivateFields = (shop: any) => {
+const sanitizeAddressDetails = (details: any) => {
+  if (!details || typeof details !== 'object') return null;
+  const {
+    lat,
+    lng,
+    zip,
+    city,
+    number,
+    street,
+    province,
+    mapsUrl,
+    catalogUrl,
+    imageUrl,
+    storeImageUrl,
+    contactName,
+  } = details;
+  return {
+    ...(lat !== undefined ? { lat } : {}),
+    ...(lng !== undefined ? { lng } : {}),
+    ...(zip ? { zip } : {}),
+    ...(city ? { city } : {}),
+    ...(number ? { number } : {}),
+    ...(street ? { street } : {}),
+    ...(province ? { province } : {}),
+    ...(mapsUrl ? { mapsUrl } : {}),
+    ...(catalogUrl ? { catalogUrl } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
+    ...(storeImageUrl ? { storeImageUrl } : {}),
+    ...(contactName ? { contactName } : {}),
+  };
+};
+
+const sanitizeSocialHandles = (handles: any) =>
+  Array.isArray(handles)
+    ? handles
+        .map((handle) => ({
+          platform: handle?.platform,
+          handle: handle?.handle,
+        }))
+        .filter((handle) => handle.platform && handle.handle)
+    : [];
+
+const sanitizeWhatsappLines = (lines: any) =>
+  Array.isArray(lines)
+    ? lines
+        .map((line) => ({
+          label: line?.label,
+          number: line?.number,
+        }))
+        .filter((line) => line.label && line.number)
+    : [];
+
+const sanitizeShopBase = (shop: any) => {
   if (!shop) return shop;
-  const { authUserId, requiresEmailFix, ...rest } = shop;
-  return rest;
+  return {
+    id: shop.id,
+    name: shop.name,
+    slug: shop.slug,
+    logoUrl: shop.logoUrl ?? null,
+    coverUrl: shop.coverUrl ?? null,
+    website: shop.website ?? null,
+    address: shop.address ?? null,
+    addressDetails: sanitizeAddressDetails(shop.addressDetails),
+    minimumPurchase: shop.minimumPurchase ?? 0,
+    paymentMethods: Array.isArray(shop.paymentMethods) ? shop.paymentMethods : [],
+    plan: shop.plan,
+    status: shop.status,
+    statusReason: shop.statusReason ?? null,
+    statusChangedAt: shop.statusChangedAt ?? null,
+    ownerAcceptedAt: shop.ownerAcceptedAt ?? null,
+    agendaSuspendedUntil: shop.agendaSuspendedUntil ?? null,
+    agendaSuspendedReason: shop.agendaSuspendedReason ?? null,
+    streamQuota: shop.streamQuota ?? 0,
+    reelQuota: shop.reelQuota ?? 0,
+    active: Boolean(shop.active),
+    createdAt: shop.createdAt,
+    updatedAt: shop.updatedAt,
+    ratingAverage: typeof shop.ratingAverage === 'number' ? shop.ratingAverage : 0,
+    ratingCount: typeof shop.ratingCount === 'number' ? shop.ratingCount : 0,
+    socialHandles: sanitizeSocialHandles(shop.socialHandles),
+    whatsappLines: sanitizeWhatsappLines(shop.whatsappLines),
+    ...(shop.authUserId ? { authUserId: shop.authUserId } : {}),
+    ...(shop.email ? { email: shop.email } : {}),
+    ...(shop.razonSocial ? { razonSocial: shop.razonSocial } : {}),
+    ...(shop.cuit ? { cuit: shop.cuit } : {}),
+  };
 };
 
 const applyVisibilityRules = (shop: any, req: Request) => {
   if (!shop) return shop;
-  const lines = Array.isArray(shop.whatsappLines) ? shop.whatsappLines : [];
-  const socialHandles = Array.isArray(shop.socialHandles) ? shop.socialHandles : [];
+  const base = sanitizeShopBase(shop);
   if (!req.auth) {
-    return { ...shop, whatsappLines: [], socialHandles: ShopsService.filterSocialHandlesByPlan(shop.plan, socialHandles) };
+    return { ...base, whatsappLines: [], socialHandles: [] };
   }
   if (req.auth.userType === 'ADMIN') {
-    return shop;
+    return base;
   }
   if (req.auth.userType === 'SHOP' && req.auth.shopId === shop.id) {
-    return shop;
+    return base;
   }
-  const limit = ShopsService.getWhatsappLimit(shop.plan);
   return {
-    ...shop,
-    whatsappLines: lines.slice(0, limit),
-    socialHandles: ShopsService.filterSocialHandlesByPlan(shop.plan, socialHandles),
+    ...base,
+    authUserId: undefined,
+    email: undefined,
+    razonSocial: undefined,
+    cuit: undefined,
   };
 };
 
 const sanitizeShopPayload = (payload: any, req: Request) => {
-  const sanitizeOne = (shop: any) => applyVisibilityRules(stripShopPrivateFields(shop), req);
+  const sanitizeOne = (shop: any) => applyVisibilityRules(shop, req);
   if (Array.isArray(payload)) return payload.map(sanitizeOne);
   return sanitizeOne(payload);
 };

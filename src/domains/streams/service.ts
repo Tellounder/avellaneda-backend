@@ -125,6 +125,69 @@ const clearRemindersForStream = async (streamId: string) => {
 const hasSocialHandle = (handles: { platform: SocialPlatform }[], platform: SocialPlatform) =>
   handles.some((handle) => handle.platform === platform);
 
+const STREAM_SHOP_PUBLIC_SELECT = {
+  id: true,
+  name: true,
+  slug: true,
+  logoUrl: true,
+  coverUrl: true,
+  website: true,
+  address: true,
+  addressDetails: true,
+  minimumPurchase: true,
+  paymentMethods: true,
+  plan: true,
+  status: true,
+  active: true,
+  socialHandles: {
+    select: {
+      platform: true,
+      handle: true,
+    },
+  },
+  whatsappLines: {
+    select: {
+      label: true,
+      number: true,
+    },
+  },
+} as const;
+
+const STREAM_PUBLIC_SELECT = {
+  id: true,
+  shopId: true,
+  title: true,
+  description: true,
+  status: true,
+  scheduledAt: true,
+  scheduledEndPlanned: true,
+  timezone: true,
+  startTime: true,
+  endTime: true,
+  durationMinutes: true,
+  cancelledAt: true,
+  cancelReason: true,
+  hidden: true,
+  visibilityReason: true,
+  platform: true,
+  url: true,
+  extensionCount: true,
+  views: true,
+  likes: true,
+  reportCount: true,
+  editCount: true,
+  lastEditedAt: true,
+  originalScheduledAt: true,
+  reprogrammedFromId: true,
+  reprogramReason: true,
+  pendingReprogramNote: true,
+  reprogramBatchId: true,
+  createdAt: true,
+  shop: {
+    select: STREAM_SHOP_PUBLIC_SELECT,
+  },
+} as const;
+
 const validateStreamSchedule = async (
   data: any,
   excludeId?: string,
@@ -200,15 +263,7 @@ const validateStreamSchedule = async (
 export const getStreams = async () => {
   const streams = await prisma.stream.findMany({
     orderBy: { createdAt: 'desc' },
-    include: {
-      shop: {
-        include: {
-          socialHandles: true,
-          whatsappLines: true,
-          penalties: true,
-        },
-      },
-    },
+    select: STREAM_PUBLIC_SELECT,
   });
 
   const ratings = await getShopRatingsMap();
@@ -229,15 +284,7 @@ export const getStreams = async () => {
 export const getStreamById = async (id: string) => {
   const stream = await prisma.stream.findUnique({
     where: { id },
-    include: {
-      shop: {
-        include: {
-          socialHandles: true,
-          whatsappLines: true,
-          penalties: true,
-        },
-      },
-    },
+    select: STREAM_PUBLIC_SELECT,
   });
   if (!stream || !stream.shop) {
     return stream;

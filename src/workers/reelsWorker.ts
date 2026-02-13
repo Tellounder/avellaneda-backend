@@ -12,6 +12,18 @@ import { processPhotoFromPath, processVideoFromPath } from '../services/reelsMed
 
 const BATCH_SIZE = Math.max(1, Number(process.env.REEL_WORKER_BATCH || 3));
 const INTERVAL_MS = Math.max(15_000, Number(process.env.REEL_WORKER_INTERVAL_MS || 60_000));
+const DOWNLOAD_TIMEOUT_MS = Math.max(
+  30_000,
+  Number(process.env.REEL_WORKER_DOWNLOAD_TIMEOUT_MS || 180_000)
+);
+const PROCESS_TIMEOUT_MS = Math.max(
+  120_000,
+  Number(process.env.REEL_WORKER_PROCESS_TIMEOUT_MS || 900_000)
+);
+const LOCK_TTL_MS = Math.max(
+  120_000,
+  Number(process.env.REEL_WORKER_LOCK_TTL_MS || 10 * 60_000)
+);
 const MAX_REDIRECTS = 3;
 let cycleInProgress = false;
 
@@ -31,6 +43,21 @@ const createTempDir = async () => {
   const base = path.join(os.tmpdir(), 'avellaneda-reels-worker');
   await fsPromises.mkdir(base, { recursive: true });
   return fsPromises.mkdtemp(path.join(base, 'job-'));
+};
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  return new Promise<T>((resolve, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error(`${label} excedio el timeout (${timeoutMs}ms).`));
+    }, timeoutMs);
+    promise
+      .then((result) => resolve(result))
+      .catch((error) => reject(error))
+      .finally(() => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      });
+  });
 };
 
 const downloadToFile = async (url: string, destPath: string, redirects = 0): Promise<void> => {
@@ -59,6 +86,9 @@ const downloadToFile = async (url: string, destPath: string, redirects = 0): Pro
       fileStream.on('finish', () => fileStream.close(() => resolve()));
       fileStream.on('error', (error) => reject(error));
     });
+    req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Descarga timeout (${DOWNLOAD_TIMEOUT_MS}ms)`));
+    });
     req.on('error', reject);
   });
 };
@@ -82,6 +112,70 @@ const buildEditorStateWithProgress = (base: any, progress: number) => {
       : { version: 1, mediaTransforms: [], stickers: [] };
   normalized.progress = progress;
   return normalized;
+};
+
+const buildEditorStateWithMeta = (base: any, patch: Record<string, any>) => {
+  const normalized =
+    base && typeof base === 'object'
+      ? { ...base }
+      : { version: 1, mediaTransforms: [], stickers: [] };
+  return { ...normalized, ...patch };
+};
+
+const readLockTimestamp = (editorState: any, createdAt: Date) => {
+  const fromState = editorState?.workerLockedAt || editorState?.workerHeartbeatAt || null;
+  if (typeof fromState === 'string') {
+    const parsed = Date.parse(fromState);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return createdAt.getTime();
+};
+
+const releaseStaleLocks = async () => {
+  const now = Date.now();
+  const locked = await prisma.reel.findMany({
+    where: {
+      status: ReelStatus.PROCESSING,
+      processingJobId: { not: null },
+    },
+    take: Math.max(20, BATCH_SIZE * 10),
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      processingJobId: true,
+      editorState: true,
+      createdAt: true,
+    },
+  });
+
+  for (const reel of locked) {
+    if (!reel.processingJobId) continue;
+    const editorState = normalizeEditorState(reel.editorState);
+    const lockTs = readLockTimestamp(editorState, reel.createdAt);
+    const ageMs = now - lockTs;
+    if (ageMs <= LOCK_TTL_MS) continue;
+
+    const nextEditorState = buildEditorStateWithMeta(editorState, {
+      workerStage: 'REQUEUED',
+      workerRequeuedAt: new Date().toISOString(),
+      workerLastJobId: reel.processingJobId,
+      workerError: `Lock vencido (${ageMs}ms).`,
+    });
+
+    const released = await prisma.reel.updateMany({
+      where: { id: reel.id, processingJobId: reel.processingJobId },
+      data: {
+        processingJobId: null,
+        editorState: nextEditorState,
+      },
+    });
+
+    if (released.count > 0) {
+      console.warn(
+        `[reels-worker] Lock vencido liberado: ${reel.id} job=${reel.processingJobId} ageMs=${ageMs}`
+      );
+    }
+  }
 };
 
 const getExtensionFromUrl = (url: string) => {
@@ -108,12 +202,23 @@ const processReel = async (reel: {
   const jobId = crypto.randomUUID();
   const claimed = await claimReel(reel.id, jobId);
   if (!claimed) return;
-
-  const tempDir = await createTempDir();
-  const progressState = { last: -1, lastAt: 0 };
   const baseEditorState = reel.editorState && typeof reel.editorState === 'object' ? reel.editorState : null;
+  const claimedAtIso = new Date().toISOString();
+  await prisma.reel.updateMany({
+    where: { id: reel.id, processingJobId: jobId },
+    data: {
+      editorState: buildEditorStateWithMeta(baseEditorState, {
+        workerStage: 'CLAIMED',
+        workerJobId: jobId,
+        workerLockedAt: claimedAtIso,
+      }),
+    },
+  });
 
-  const reportProgress = async (value: number) => {
+  let tempDir = '';
+  const progressState = { last: -1, lastAt: 0 };
+
+  const reportProgress = async (value: number, stage = 'PROCESSING') => {
     const next = Math.max(0, Math.min(100, Math.round(value)));
     const now = Date.now();
     if (next === progressState.last) return;
@@ -122,34 +227,47 @@ const processReel = async (reel: {
     }
     progressState.last = next;
     progressState.lastAt = now;
-    const editorState = buildEditorStateWithProgress(baseEditorState, next);
+    const editorState = buildEditorStateWithMeta(buildEditorStateWithProgress(baseEditorState, next), {
+      workerStage: stage,
+      workerJobId: jobId,
+      workerLockedAt: new Date().toISOString(),
+    });
     await prisma.reel.updateMany({
       where: { id: reel.id, processingJobId: jobId },
       data: { editorState },
     });
   };
   try {
+    tempDir = await createTempDir();
     let nextVideoUrl: string | null = null;
     let nextThumbUrl: string | null = null;
     let nextPhotoUrls: string[] = [];
 
-    await reportProgress(0);
+    await reportProgress(0, 'START');
 
     if (reel.type === ReelType.VIDEO && reel.videoUrl) {
       const sourcePath = path.join(tempDir, 'source-video');
-      await downloadToFile(reel.videoUrl, sourcePath);
+      await withTimeout(
+        downloadToFile(reel.videoUrl, sourcePath),
+        DOWNLOAD_TIMEOUT_MS,
+        'Descarga de video'
+      );
       const stat = await fsPromises.stat(sourcePath);
       if (!stat.size) {
         throw new Error(`Archivo descargado vacio (video): ${sourcePath}`);
       }
-      const { videoUrl, thumbnailUrl } = await processVideoFromPath(
-        reel.shopId,
-        sourcePath,
-        tempDir,
-        reel.editorState,
-        (percent) => {
-          void reportProgress(percent);
-        }
+      const { videoUrl, thumbnailUrl } = await withTimeout(
+        processVideoFromPath(
+          reel.shopId,
+          sourcePath,
+          tempDir,
+          reel.editorState,
+          (percent) => {
+            void reportProgress(percent, 'RENDER_VIDEO');
+          }
+        ),
+        PROCESS_TIMEOUT_MS,
+        'Render de video'
       );
       nextVideoUrl = videoUrl;
       nextThumbUrl = thumbnailUrl;
@@ -162,28 +280,34 @@ const processReel = async (reel: {
         if (!url) continue;
         const ext = getExtensionFromUrl(url) || '.jpg';
         const sourcePath = path.join(tempDir, `source-photo-${index}${ext}`);
-        await downloadToFile(url, sourcePath);
+        await withTimeout(
+          downloadToFile(url, sourcePath),
+          DOWNLOAD_TIMEOUT_MS,
+          `Descarga de foto ${index + 1}`
+        );
         const stat = await fsPromises.stat(sourcePath);
         if (!stat.size) {
           throw new Error(`Archivo descargado vacio (foto ${index}): ${sourcePath}`);
         }
-        const processedUrl = await processPhotoFromPath(
-          reel.shopId,
-          sourcePath,
-          tempDir,
-          reel.editorState,
-          index
+        const processedUrl = await withTimeout(
+          processPhotoFromPath(reel.shopId, sourcePath, tempDir, reel.editorState, index),
+          PROCESS_TIMEOUT_MS,
+          `Render de foto ${index + 1}`
         );
         nextPhotoUrls.push(processedUrl);
-        await reportProgress(((index + 1) / totalPhotos) * 100);
+        await reportProgress(((index + 1) / totalPhotos) * 100, 'RENDER_PHOTO_SET');
       }
       nextThumbUrl = nextPhotoUrls[0] || null;
     }
 
-    const nextEditorState =
-      reel.editorState && typeof reel.editorState === 'object'
-        ? { ...reel.editorState, rendered: true, renderedAt: new Date().toISOString(), progress: 100 }
-        : buildEditorStateWithProgress(null, 100);
+    const nextEditorState = buildEditorStateWithMeta(buildEditorStateWithProgress(baseEditorState, 100), {
+      rendered: true,
+      renderedAt: new Date().toISOString(),
+      workerStage: 'DONE',
+      workerJobId: jobId,
+      workerLockedAt: new Date().toISOString(),
+      workerError: null,
+    });
     await prisma.reel.update({
       where: { id: reel.id },
       data: {
@@ -199,16 +323,33 @@ const processReel = async (reel: {
     console.log(`[reels-worker] Procesado OK: ${reel.id}`);
   } catch (error) {
     console.error(`[reels-worker] Error procesando reel ${reel.id}:`, error);
-    await prisma.reel.update({
-      where: { id: reel.id },
-      data: { processingJobId: null },
+    const retries = Number(baseEditorState?.processingRetries || 0) + 1;
+    const message =
+      error instanceof Error ? error.message.slice(0, 500) : 'Error no identificado en el worker.';
+    const errorEditorState = buildEditorStateWithMeta(baseEditorState, {
+      workerStage: 'ERROR',
+      workerJobId: jobId,
+      workerLockedAt: new Date().toISOString(),
+      workerFailedAt: new Date().toISOString(),
+      workerError: message,
+      processingRetries: retries,
+    });
+    await prisma.reel.updateMany({
+      where: { id: reel.id, processingJobId: jobId },
+      data: {
+        processingJobId: null,
+        editorState: errorEditorState,
+      },
     });
   } finally {
-    await cleanupDir(tempDir);
+    if (tempDir) {
+      await cleanupDir(tempDir);
+    }
   }
 };
 
 const runOnce = async () => {
+  await releaseStaleLocks();
   const now = new Date();
   const reels = await prisma.reel.findMany({
     where: {
@@ -251,7 +392,9 @@ const runCycle = async () => {
 };
 
 const start = async () => {
-  console.log(`[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms`);
+  console.log(
+    `[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms downloadTimeout=${DOWNLOAD_TIMEOUT_MS}ms processTimeout=${PROCESS_TIMEOUT_MS}ms lockTtl=${LOCK_TTL_MS}ms`
+  );
   await runCycle();
   setInterval(() => {
     runCycle().catch((error) => console.error('[reels-worker] Error en ciclo:', error));

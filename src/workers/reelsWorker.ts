@@ -24,6 +24,7 @@ const LOCK_TTL_MS = Math.max(
   120_000,
   Number(process.env.REEL_WORKER_LOCK_TTL_MS || 10 * 60_000)
 );
+const MAX_RETRIES = Math.max(1, Number(process.env.REEL_WORKER_MAX_RETRIES || 5));
 const MAX_REDIRECTS = 3;
 let cycleInProgress = false;
 
@@ -199,10 +200,34 @@ const processReel = async (reel: {
 }) => {
   if (reel.type === ReelType.VIDEO && !reel.videoUrl) return;
   if (reel.type === ReelType.PHOTO_SET && (!reel.photoUrls || reel.photoUrls.length === 0)) return;
+  const normalizedInputState = normalizeEditorState(reel.editorState);
+  const existingRetries = Number(normalizedInputState?.processingRetries || 0);
+  if (existingRetries >= MAX_RETRIES) {
+    const failedState = buildEditorStateWithMeta(normalizedInputState, {
+      workerStage: 'FAILED_PERMANENT',
+      workerFailedAt: new Date().toISOString(),
+      workerError: `Maximo de reintentos alcanzado (${existingRetries}/${MAX_RETRIES}).`,
+    });
+    await prisma.reel.update({
+      where: { id: reel.id },
+      data: {
+        status: ReelStatus.HIDDEN,
+        hidden: true,
+        processingJobId: null,
+        editorState: failedState,
+      },
+    });
+    console.error(
+      `[reels-worker] Reel ${reel.id} ocultado por max retries (${existingRetries}/${MAX_RETRIES}).`
+    );
+    return;
+  }
+
   const jobId = crypto.randomUUID();
   const claimed = await claimReel(reel.id, jobId);
   if (!claimed) return;
-  const baseEditorState = reel.editorState && typeof reel.editorState === 'object' ? reel.editorState : null;
+  const baseEditorState =
+    normalizedInputState && typeof normalizedInputState === 'object' ? normalizedInputState : null;
   const claimedAtIso = new Date().toISOString();
   await prisma.reel.updateMany({
     where: { id: reel.id, processingJobId: jobId },
@@ -211,9 +236,11 @@ const processReel = async (reel: {
         workerStage: 'CLAIMED',
         workerJobId: jobId,
         workerLockedAt: claimedAtIso,
+        processingRetries: existingRetries,
       }),
     },
   });
+  console.log(`[reels-worker] Claim OK reel=${reel.id} job=${jobId} retries=${existingRetries}`);
 
   let tempDir = '';
   const progressState = { last: -1, lastAt: 0 };
@@ -393,7 +420,7 @@ const runCycle = async () => {
 
 const start = async () => {
   console.log(
-    `[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms downloadTimeout=${DOWNLOAD_TIMEOUT_MS}ms processTimeout=${PROCESS_TIMEOUT_MS}ms lockTtl=${LOCK_TTL_MS}ms`
+    `[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms downloadTimeout=${DOWNLOAD_TIMEOUT_MS}ms processTimeout=${PROCESS_TIMEOUT_MS}ms lockTtl=${LOCK_TTL_MS}ms maxRetries=${MAX_RETRIES}`
   );
   await runCycle();
   setInterval(() => {

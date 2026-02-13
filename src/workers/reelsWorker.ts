@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import crypto from 'crypto';
 import fs from 'fs';
 import fsPromises from 'fs/promises';
@@ -12,6 +13,7 @@ import { processPhotoFromPath, processVideoFromPath } from '../services/reelsMed
 const BATCH_SIZE = Math.max(1, Number(process.env.REEL_WORKER_BATCH || 3));
 const INTERVAL_MS = Math.max(15_000, Number(process.env.REEL_WORKER_INTERVAL_MS || 60_000));
 const MAX_REDIRECTS = 3;
+let cycleInProgress = false;
 
 const normalizeEditorState = (value: any) => {
   if (!value) return null;
@@ -210,7 +212,7 @@ const runOnce = async () => {
   const now = new Date();
   const reels = await prisma.reel.findMany({
     where: {
-      status: { in: [ReelStatus.PROCESSING, ReelStatus.ACTIVE] },
+      status: ReelStatus.PROCESSING,
       expiresAt: { gte: now },
       processingJobId: null,
     },
@@ -229,23 +231,30 @@ const runOnce = async () => {
 
   const candidates = reels
     .map((reel) => ({ ...reel, editorState: normalizeEditorState(reel.editorState) }))
-    .filter(
-      (reel) =>
-        reel.status === ReelStatus.PROCESSING ||
-        !reel.editorState ||
-        reel.editorState.rendered !== true
-    );
+    .filter((reel) => reel.status === ReelStatus.PROCESSING);
 
   for (const reel of candidates) {
     await processReel(reel);
   }
 };
 
+const runCycle = async () => {
+  if (cycleInProgress) {
+    return;
+  }
+  cycleInProgress = true;
+  try {
+    await runOnce();
+  } finally {
+    cycleInProgress = false;
+  }
+};
+
 const start = async () => {
   console.log(`[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms`);
-  await runOnce();
+  await runCycle();
   setInterval(() => {
-    runOnce().catch((error) => console.error('[reels-worker] Error en ciclo:', error));
+    runCycle().catch((error) => console.error('[reels-worker] Error en ciclo:', error));
   }, INTERVAL_MS);
 };
 

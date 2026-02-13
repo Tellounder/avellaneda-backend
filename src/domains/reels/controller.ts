@@ -128,6 +128,30 @@ export const getReelById = async (req: Request, res: Response) => {
   res.json(sanitizeReelPayload(reel));
 };
 
+export const getReelStatus = async (req: Request, res: Response) => {
+  if (!req.auth) {
+    return res.status(401).json({ message: 'Autenticacion requerida.' });
+  }
+  const reel = await ReelsService.getReelProcessingStatus(req.params.id);
+  if (!reel) {
+    return res.status(404).json({ message: 'Reel no encontrado.' });
+  }
+  if (req.auth.userType !== 'ADMIN' && !(req.auth.userType === 'SHOP' && req.auth.shopId === reel.shopId)) {
+    return res.status(403).json({ message: 'Acceso denegado.' });
+  }
+  const payload = {
+    id: reel.id,
+    type: reel.type,
+    status: reel.status,
+    processingJobId: reel.processingJobId,
+    editorState: reel.editorState,
+    videoUrl: reel.videoUrl,
+    photoUrls: reel.photoUrls,
+    thumbnailUrl: reel.thumbnailUrl,
+  };
+  return res.json(payload);
+};
+
 export const createReel = async (req: Request, res: Response) => {
   if (!req.auth) {
     return res.status(401).json({ message: 'Autenticacion requerida.' });

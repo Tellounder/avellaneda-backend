@@ -7,6 +7,7 @@ const router = Router();
 router.get('/', ReelsController.getActiveReels);
 router.get('/admin', requireAdmin, ReelsController.getAllReelsAdmin);
 router.get('/shop/:shopId', requireShopOrAdmin((req) => req.params.shopId), ReelsController.getReelsByShop);
+router.get('/:id/status', requireAuth, ReelsController.getReelStatus);
 router.get('/:id', requireAuth, ReelsController.getReelById);
 router.post('/', requireShopOrAdmin((req) => req.body?.shopId), ReelsController.createReel);
 router.post('/:id/hide', requireAuth, ReelsController.hideReel);

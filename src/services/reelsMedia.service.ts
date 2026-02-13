@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import path from 'path';
 import os from 'os';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import ffmpegPath from 'ffmpeg-static';
 import sharp from 'sharp';
 // `fluent-ffmpeg` does not ship typings in our runtime path.
@@ -15,6 +16,80 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const reelsBucket = process.env.SUPABASE_REELS_BUCKET || 'reels';
 const TARGET_WIDTH = 720;
 const TARGET_HEIGHT = 1280;
+const MANROPE_FONT_PATH = path.resolve(process.cwd(), 'assets', 'fonts', 'Manrope.ttf');
+let manropeFontBase64: string | null = null;
+let manropePathLogged = false;
+
+const resolveEditorSpec = (editorState: any) => {
+  const spec = editorState?.spec;
+  const width = Number(spec?.width);
+  const height = Number(spec?.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return { width, height };
+};
+
+const normalizeFromSpec = (value: number, specValue: number | undefined) => {
+  if (!Number.isFinite(value)) return 0;
+  if (!specValue || !Number.isFinite(specValue) || specValue <= 0) return value;
+  return value / specValue;
+};
+
+const scaleFromSpec = (value: number, spec: { width: number; height: number } | null) => {
+  if (!Number.isFinite(value)) return 0;
+  if (!spec) return value;
+  const ratio = TARGET_WIDTH / spec.width;
+  return value * ratio;
+};
+
+const resolveTextAnchor = (anchorX?: number) => {
+  const value = clampNumber(Number(anchorX ?? 0), 0, 1, 0);
+  if (value >= 0.66) return 'end';
+  if (value >= 0.33) return 'middle';
+  return 'start';
+};
+
+const resolveBaseline = (anchorY?: number) => {
+  const value = clampNumber(Number(anchorY ?? 0), 0, 1, 0);
+  if (value >= 0.66) return 'alphabetic';
+  if (value >= 0.33) return 'middle';
+  return 'hanging';
+};
+
+const resolveCropRect = (
+  transform: any,
+  spec: { width: number; height: number } | null
+) => {
+  const crop = transform?.crop;
+  if (!crop) return null;
+  const rawWidth = Number(crop.width);
+  const rawHeight = Number(crop.height);
+  if (!Number.isFinite(rawWidth) || !Number.isFinite(rawHeight) || rawWidth <= 0 || rawHeight <= 0) {
+    return null;
+  }
+  const rawX = Number(crop.x ?? 0);
+  const rawY = Number(crop.y ?? 0);
+  const normalized =
+    rawWidth <= 1 &&
+    rawHeight <= 1 &&
+    Math.abs(rawX) <= 1.5 &&
+    Math.abs(rawY) <= 1.5;
+  const widthNorm = normalized ? rawWidth : normalizeFromSpec(rawWidth, spec?.width);
+  const heightNorm = normalized ? rawHeight : normalizeFromSpec(rawHeight, spec?.height);
+  const xNorm = normalized ? rawX : normalizeFromSpec(rawX, spec?.width);
+  const yNorm = normalized ? rawY : normalizeFromSpec(rawY, spec?.height);
+  const clampedW = clampNumber(widthNorm, 0.05, 1, 1);
+  const clampedH = clampNumber(heightNorm, 0.05, 1, 1);
+  const clampedX = clampNumber(xNorm, 0, 1 - clampedW, 0);
+  const clampedY = clampNumber(yNorm, 0, 1 - clampedH, 0);
+  const width = Math.round(clampedW * TARGET_WIDTH);
+  const height = Math.round(clampedH * TARGET_HEIGHT);
+  const x = Math.round(clampedX * TARGET_WIDTH);
+  const y = Math.round(clampedY * TARGET_HEIGHT);
+  if (width <= 0 || height <= 0) return null;
+  return { x, y, width, height };
+};
 
 const assertSupabaseConfigured = () => {
   if (!supabaseUrl || !supabaseKey) {
@@ -74,6 +149,29 @@ const clampNumber = (value: number, min: number, max: number, fallback: number) 
   return Math.max(min, Math.min(max, value));
 };
 
+const loadManropeFont = async () => {
+  if (manropeFontBase64) return manropeFontBase64;
+  if (!manropePathLogged) {
+    const exists = fsSync.existsSync(MANROPE_FONT_PATH);
+    console.log(
+      `[reels-worker] Manrope path: ${MANROPE_FONT_PATH} (exists=${exists})`
+    );
+    manropePathLogged = true;
+  }
+  try {
+    const buffer = await fs.readFile(MANROPE_FONT_PATH);
+    if (!buffer.length) {
+      throw new Error('Fuente Manrope vacia.');
+    }
+    manropeFontBase64 = buffer.toString('base64');
+    return manropeFontBase64;
+  } catch (error) {
+    throw new Error(
+      `No se pudo cargar la fuente Manrope (${MANROPE_FONT_PATH}).`
+    );
+  }
+};
+
 const escapeSvgText = (value: string) =>
   value
     .replace(/&/g, '&amp;')
@@ -86,22 +184,51 @@ const buildStickerOverlay = async (editorState: any, tempDir: string) => {
   if (!editorState || !Array.isArray(editorState.stickers)) return null;
   const stickers = editorState.stickers.filter((sticker: any) => String(sticker?.text || '').trim());
   if (!stickers.length) return null;
+  const spec = resolveEditorSpec(editorState);
+  const fontBase64 = await loadManropeFont();
+  const fontFace = `
+  <defs>
+    <style type="text/css">
+      @font-face {
+        font-family: 'Manrope';
+        src: url("data:font/ttf;base64,${fontBase64}") format('truetype');
+        font-weight: 100 900;
+        font-style: normal;
+      }
+    </style>
+  </defs>`;
 
   const elements = stickers.map((sticker: any) => {
     const rawText = String(sticker?.text || '').trim();
-    const x = Math.round(clampNumber(Number(sticker.x), -2, 2, 0) * TARGET_WIDTH);
-    const y = Math.round(clampNumber(Number(sticker.y), -2, 2, 0) * TARGET_HEIGHT);
+    const normalizedX = normalizeFromSpec(Number(sticker.x), spec?.width);
+    const normalizedY = normalizeFromSpec(Number(sticker.y), spec?.height);
+    const x = Math.round(clampNumber(normalizedX, -2, 2, 0) * TARGET_WIDTH);
+    const y = Math.round(clampNumber(normalizedY, -2, 2, 0) * TARGET_HEIGHT);
     const scale = clampNumber(Number(sticker.scale ?? 1), 0.5, 3, 1);
-    const fontSize = Math.max(16, Math.round(42 * scale));
+    const baseFontSize = Number(sticker.fontSize ?? 42);
+    const baseLineHeight = Number(sticker.lineHeight ?? baseFontSize * 1.25);
+    const fontSize = Math.max(10, Math.round(scaleFromSpec(baseFontSize, spec) * scale));
+    const lineHeight = Math.max(10, Math.round(scaleFromSpec(baseLineHeight, spec) * scale));
     const color = String(sticker.color || '#ffffff');
     const rotation = clampNumber(Number(sticker.rotation ?? 0), -180, 180, 0);
-    const text = escapeSvgText(rawText);
+    const fontFamily = 'Manrope';
+    const textAnchor = resolveTextAnchor(sticker.anchorX);
+    const baseline = resolveBaseline(sticker.anchorY);
+    const lines = rawText.split(/\r?\n/);
+    const tspans = lines
+      .map((line, index) => {
+        const safeLine = escapeSvgText(line);
+        const dy = index === 0 ? '0' : String(lineHeight);
+        return `<tspan x="${x}" dy="${dy}">${safeLine}</tspan>`;
+      })
+      .join('');
     const transform = rotation ? ` transform="rotate(${rotation} ${x} ${y})"` : '';
-    return `<text x="${x}" y="${y}" fill="${color}" font-size="${fontSize}" font-family="Arial, sans-serif"${transform}>${text}</text>`;
+    return `<text x="${x}" y="${y}" fill="${color}" font-size="${fontSize}" font-family="${fontFamily}" text-anchor="${textAnchor}" dominant-baseline="${baseline}"${transform}>${tspans}</text>`;
   });
 
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="${TARGET_WIDTH}" height="${TARGET_HEIGHT}" viewBox="0 0 ${TARGET_WIDTH} ${TARGET_HEIGHT}">
+  ${fontFace}
   ${elements.join('\n')}
 </svg>`;
 
@@ -111,17 +238,27 @@ const buildStickerOverlay = async (editorState: any, tempDir: string) => {
 };
 
 const buildEditorFilter = (editorState: any, mediaIndex = 0, withOverlay = false) => {
-  const baseFilter = `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
-  let filter = `[0:v]${baseFilter}[base]`;
-  let currentLabel = 'base';
-
+  const spec = resolveEditorSpec(editorState);
   const transforms = Array.isArray(editorState?.mediaTransforms) ? editorState.mediaTransforms : [];
   const transform = transforms[mediaIndex] || transforms[0];
+  const fitMode = transform?.fit || editorState?.fit || 'contain';
+  const cropRect = resolveCropRect(transform, spec);
+  let baseFilter =
+    fitMode === 'cover'
+      ? `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=increase,crop=${TARGET_WIDTH}:${TARGET_HEIGHT},setsar=1`
+      : `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+  if (cropRect) {
+    baseFilter += `,crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},scale=${TARGET_WIDTH}:${TARGET_HEIGHT}`;
+  }
+  let filter = `[0:v]${baseFilter}[base]`;
+  let currentLabel = 'base';
   if (transform) {
     const scale = clampNumber(Number(transform.scale ?? 1), 0.2, 4, 1);
     const rotationRad = ((Number(transform.rotation) || 0) * Math.PI) / 180;
-    const offsetX = Math.round((Number(transform.x) || 0) * TARGET_WIDTH);
-    const offsetY = Math.round((Number(transform.y) || 0) * TARGET_HEIGHT);
+    const normalizedX = normalizeFromSpec(Number(transform.x), spec?.width);
+    const normalizedY = normalizeFromSpec(Number(transform.y), spec?.height);
+    const offsetX = Math.round(normalizedX * TARGET_WIDTH);
+    const offsetY = Math.round(normalizedY * TARGET_HEIGHT);
     const overlayX = `(W-w)/2+${offsetX}`;
     const overlayY = `(H-h)/2+${offsetY}`;
     filter += `;[base]scale=iw*${scale}:ih*${scale},rotate=${rotationRad}:fillcolor=black@0[scaled]`;

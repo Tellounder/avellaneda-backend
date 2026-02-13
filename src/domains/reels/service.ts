@@ -56,6 +56,18 @@ const REEL_OWNER_SELECT = {
   processingJobId: true,
 } as const;
 
+const REEL_PROGRESS_SELECT = {
+  id: true,
+  shopId: true,
+  type: true,
+  status: true,
+  processingJobId: true,
+  editorState: true,
+  videoUrl: true,
+  photoUrls: true,
+  thumbnailUrl: true,
+} as const;
+
 export const getActiveReels = async (limit = 80) => {
   const now = new Date();
   return prisma.reel.findMany({
@@ -90,6 +102,13 @@ export const getReelById = async (id: string) => {
   return prisma.reel.findUnique({
     where: { id },
     select: REEL_OWNER_SELECT,
+  });
+};
+
+export const getReelProcessingStatus = async (id: string) => {
+  return prisma.reel.findUnique({
+    where: { id },
+    select: REEL_PROGRESS_SELECT,
   });
 };
 

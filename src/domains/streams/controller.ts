@@ -3,6 +3,7 @@ import * as StreamsService from './service';
 import { getOrSetCache } from '../../utils/publicCache';
 
 const STREAMS_CACHE_MS = 15_000;
+const STREAMS_PUBLIC_TIME_ZONE = 'America/Argentina/Buenos_Aires';
 
 const sanitizeAddressDetails = (details: any) => {
   if (!details || typeof details !== 'object') return null;
@@ -85,6 +86,66 @@ const sanitizeStreamPayload = (payload: any, req: Request) => {
   return sanitizeOne(payload);
 };
 
+const isPublicStreamConsumer = (req: Request) =>
+  !req.auth || req.auth.userType === 'CLIENT';
+
+const normalizeTitleKey = (value: string) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const getDayKey = (date: Date, timeZone = STREAMS_PUBLIC_TIME_ZONE) =>
+  new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+
+const isFinalizedStatus = (status: string) =>
+  status === 'FINISHED' || status === 'MISSED';
+
+const isPubliclyVisibleStream = (stream: any) => {
+  if (!stream) return false;
+  if (stream.hidden) return false;
+  if (stream.status === 'CANCELLED' || stream.status === 'BANNED') return false;
+
+  if (!isFinalizedStatus(stream.status)) return true;
+  const scheduledAt = stream.scheduledAt || stream.startTime;
+  if (!scheduledAt) return false;
+  const scheduledDate = new Date(scheduledAt);
+  if (Number.isNaN(scheduledDate.getTime())) return false;
+
+  return getDayKey(scheduledDate) === getDayKey(new Date());
+};
+
+const dedupeFinalizedStreams = (streams: any[]) => {
+  const seen = new Set<string>();
+  const result: any[] = [];
+
+  for (const stream of streams) {
+    if (!isFinalizedStatus(stream.status)) {
+      result.push(stream);
+      continue;
+    }
+    const streamShopId = stream.shop?.id || stream.shopId || 'unknown';
+    const key = `${streamShopId}:${normalizeTitleKey(stream.title)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(stream);
+  }
+
+  return result;
+};
+
+const applyPublicStreamsPolicy = (payload: any, req: Request) => {
+  if (!Array.isArray(payload)) return payload;
+  if (!isPublicStreamConsumer(req)) return payload;
+  const visible = payload.filter(isPubliclyVisibleStream);
+  return dedupeFinalizedStreams(visible);
+};
+
 const formatICSDate = (date: Date) =>
   date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 
@@ -159,7 +220,8 @@ export const getStreamCalendar = async (req: Request, res: Response) => {
 
 export const getStreams = async (req: Request, res: Response) => {
   const data = await getOrSetCache('streams:all', STREAMS_CACHE_MS, () => StreamsService.getStreams());
-  res.json(sanitizeStreamPayload(data, req));
+  const sanitized = sanitizeStreamPayload(data, req);
+  res.json(applyPublicStreamsPolicy(sanitized, req));
 };
 
 export const getStreamById = async (req: Request, res: Response) => {

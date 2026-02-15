@@ -6,6 +6,7 @@ import http from 'http';
 import https from 'https';
 import os from 'os';
 import path from 'path';
+import { pipeline } from 'stream/promises';
 import { ReelStatus, ReelType } from '@prisma/client';
 import prisma from '../../prisma/client';
 import { processPhotoFromPath, processVideoFromPath } from '../services/reelsMedia.service';
@@ -20,10 +21,11 @@ const PROCESS_TIMEOUT_MS = Math.max(
   120_000,
   Number(process.env.REEL_WORKER_PROCESS_TIMEOUT_MS || 900_000)
 );
-const LOCK_TTL_MS = Math.max(
+const LOCK_TTL_ENV_MS = Math.max(
   120_000,
   Number(process.env.REEL_WORKER_LOCK_TTL_MS || 10 * 60_000)
 );
+const LOCK_TTL_MS = Math.max(LOCK_TTL_ENV_MS, PROCESS_TIMEOUT_MS + 60_000);
 const MAX_RETRIES = Math.max(1, Number(process.env.REEL_WORKER_MAX_RETRIES || 5));
 const MAX_REDIRECTS = 3;
 let cycleInProgress = false;
@@ -81,11 +83,8 @@ const downloadToFile = async (url: string, destPath: string, redirects = 0): Pro
         reject(new Error(`No se pudo descargar video (HTTP ${status}).`));
         return;
       }
-
       const fileStream = fs.createWriteStream(destPath);
-      res.pipe(fileStream);
-      fileStream.on('finish', () => fileStream.close(() => resolve()));
-      fileStream.on('error', (error) => reject(error));
+      pipeline(res, fileStream).then(resolve).catch(reject);
     });
     req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
       req.destroy(new Error(`Descarga timeout (${DOWNLOAD_TIMEOUT_MS}ms)`));
@@ -155,12 +154,40 @@ const releaseStaleLocks = async () => {
     const lockTs = readLockTimestamp(editorState, reel.createdAt);
     const ageMs = now - lockTs;
     if (ageMs <= LOCK_TTL_MS) continue;
+    const currentRetries = Number(editorState?.processingRetries || 0);
+    const retries = currentRetries + 1;
+
+    if (retries >= MAX_RETRIES) {
+      const failedEditorState = buildEditorStateWithMeta(editorState, {
+        workerStage: 'FAILED_PERMANENT',
+        workerFailedAt: new Date().toISOString(),
+        workerLastJobId: reel.processingJobId,
+        processingRetries: retries,
+        workerError: `Lock vencido (${ageMs}ms). Maximo de reintentos alcanzado (${retries}/${MAX_RETRIES}).`,
+      });
+      const finalized = await prisma.reel.updateMany({
+        where: { id: reel.id, processingJobId: reel.processingJobId },
+        data: {
+          status: ReelStatus.HIDDEN,
+          hidden: true,
+          processingJobId: null,
+          editorState: failedEditorState,
+        },
+      });
+      if (finalized.count > 0) {
+        console.error(
+          `[reels-worker] Reel ${reel.id} marcado como FAILED_PERMANENT por lock vencido. job=${reel.processingJobId} retries=${retries}/${MAX_RETRIES}`
+        );
+      }
+      continue;
+    }
 
     const nextEditorState = buildEditorStateWithMeta(editorState, {
       workerStage: 'REQUEUED',
       workerRequeuedAt: new Date().toISOString(),
       workerLastJobId: reel.processingJobId,
-      workerError: `Lock vencido (${ageMs}ms).`,
+      processingRetries: retries,
+      workerError: `Lock vencido (${ageMs}ms). Se reencola intento ${retries}/${MAX_RETRIES}.`,
     });
 
     const released = await prisma.reel.updateMany({
@@ -273,7 +300,7 @@ const processReel = async (reel: {
     await reportProgress(0, 'START');
 
     if (reel.type === ReelType.VIDEO && reel.videoUrl) {
-      const sourcePath = path.join(tempDir, 'source-video');
+      const sourcePath = path.join(tempDir, 'source.mp4');
       await withTimeout(
         downloadToFile(reel.videoUrl, sourcePath),
         DOWNLOAD_TIMEOUT_MS,
@@ -335,8 +362,8 @@ const processReel = async (reel: {
       workerLockedAt: new Date().toISOString(),
       workerError: null,
     });
-    await prisma.reel.update({
-      where: { id: reel.id },
+    const activated = await prisma.reel.updateMany({
+      where: { id: reel.id, processingJobId: jobId },
       data: {
         videoUrl: nextVideoUrl,
         photoUrls: nextPhotoUrls,
@@ -347,27 +374,52 @@ const processReel = async (reel: {
         editorState: nextEditorState,
       },
     });
-    console.log(`[reels-worker] Procesado OK: ${reel.id}`);
+    if (activated.count > 0) {
+      console.log(`[reels-worker] Procesado OK: ${reel.id}`);
+    } else {
+      console.warn(
+        `[reels-worker] Reel ${reel.id} no pudo activarse porque perdio lock antes de confirmar (job=${jobId}).`
+      );
+    }
   } catch (error) {
     console.error(`[reels-worker] Error procesando reel ${reel.id}:`, error);
     const retries = Number(baseEditorState?.processingRetries || 0) + 1;
+    const reachedMaxRetries = retries >= MAX_RETRIES;
     const message =
       error instanceof Error ? error.message.slice(0, 500) : 'Error no identificado en el worker.';
     const errorEditorState = buildEditorStateWithMeta(baseEditorState, {
-      workerStage: 'ERROR',
+      workerStage: reachedMaxRetries ? 'FAILED_PERMANENT' : 'ERROR',
       workerJobId: jobId,
       workerLockedAt: new Date().toISOString(),
       workerFailedAt: new Date().toISOString(),
       workerError: message,
       processingRetries: retries,
     });
-    await prisma.reel.updateMany({
+    const released = await prisma.reel.updateMany({
       where: { id: reel.id, processingJobId: jobId },
       data: {
+        ...(reachedMaxRetries ? { status: ReelStatus.HIDDEN, hidden: true } : {}),
         processingJobId: null,
         editorState: errorEditorState,
       },
     });
+    if (released.count === 0) {
+      await prisma.reel
+        .update({
+          where: { id: reel.id },
+          data: {
+            ...(reachedMaxRetries ? { status: ReelStatus.HIDDEN, hidden: true } : {}),
+            processingJobId: null,
+            editorState: errorEditorState,
+          },
+        })
+        .catch(() => undefined);
+    }
+    if (reachedMaxRetries) {
+      console.error(
+        `[reels-worker] Reel ${reel.id} marcado como FAILED_PERMANENT tras error. retries=${retries}/${MAX_RETRIES}`
+      );
+    }
   } finally {
     if (tempDir) {
       await cleanupDir(tempDir);
@@ -419,8 +471,13 @@ const runCycle = async () => {
 };
 
 const start = async () => {
+  if (!(process.env.NODE_OPTIONS || '').includes('max-old-space-size')) {
+    console.warn(
+      '[reels-worker] NODE_OPTIONS no define max-old-space-size. Recomendado: --max-old-space-size=512'
+    );
+  }
   console.log(
-    `[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms downloadTimeout=${DOWNLOAD_TIMEOUT_MS}ms processTimeout=${PROCESS_TIMEOUT_MS}ms lockTtl=${LOCK_TTL_MS}ms maxRetries=${MAX_RETRIES}`
+    `[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms downloadTimeout=${DOWNLOAD_TIMEOUT_MS}ms processTimeout=${PROCESS_TIMEOUT_MS}ms lockTtl=${LOCK_TTL_MS}ms(lockTtlEnv=${LOCK_TTL_ENV_MS}ms) maxRetries=${MAX_RETRIES}`
   );
   await runCycle();
   setInterval(() => {

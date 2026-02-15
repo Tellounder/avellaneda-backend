@@ -17,6 +17,10 @@ const reelsBucket = process.env.SUPABASE_REELS_BUCKET || 'reels';
 const TARGET_WIDTH = 720;
 const TARGET_HEIGHT = 1280;
 const MANROPE_FONT_PATH = path.resolve(process.cwd(), 'assets', 'fonts', 'Manrope.ttf');
+const FFMPEG_THREADS = Math.max(
+  1,
+  Math.min(2, Number(process.env.REEL_FFMPEG_THREADS || 1))
+);
 let manropeFontBase64: string | null = null;
 let manropePathLogged = false;
 
@@ -136,6 +140,20 @@ const uploadBuffer = async (filePath: string, buffer: Buffer, contentType: strin
     throw new Error(error.message || 'No se pudo subir el archivo procesado.');
   }
   const { data } = supabase.storage.from(reelsBucket).getPublicUrl(filePath);
+  return data.publicUrl;
+};
+
+const uploadFileFromPath = async (storagePath: string, sourcePath: string, contentType: string) => {
+  assertSupabaseConfigured();
+  const fileStream = fsSync.createReadStream(sourcePath);
+  const { error } = await supabase.storage.from(reelsBucket).upload(storagePath, fileStream, {
+    contentType,
+    upsert: true,
+  });
+  if (error) {
+    throw new Error(error.message || 'No se pudo subir el archivo procesado.');
+  }
+  const { data } = supabase.storage.from(reelsBucket).getPublicUrl(storagePath);
   return data.publicUrl;
 };
 
@@ -365,8 +383,12 @@ export const processVideoFromPath = async (
 ) => {
   ensureFfmpeg();
   await fs.mkdir(tempDir, { recursive: true });
-  const videoOutput = path.join(tempDir, 'reel-video.mp4');
-  const thumbOutput = path.join(tempDir, 'reel-thumb.jpg');
+  const sourceStat = await fs.stat(sourcePath);
+  if (!sourceStat.isFile() || sourceStat.size === 0) {
+    throw new Error(`Archivo fuente invalido o vacio: ${sourcePath}`);
+  }
+  const videoOutput = path.join(tempDir, 'out.mp4');
+  const thumbOutput = path.join(tempDir, 'out-thumb.jpg');
   const overlayPath = await buildStickerOverlay(editorState, tempDir);
   const { filter, outputLabel } = buildEditorFilter(editorState, 0, Boolean(overlayPath));
 
@@ -384,6 +406,8 @@ export const processVideoFromPath = async (
         '0:a?',
         '-c:v',
         'libx264',
+        '-threads',
+        String(FFMPEG_THREADS),
         '-preset',
         'veryfast',
         '-crf',
@@ -411,8 +435,14 @@ export const processVideoFromPath = async (
       .run();
   });
 
+  const videoStat = await fs.stat(videoOutput);
+  if (!videoStat.isFile() || videoStat.size === 0) {
+    throw new Error('No se pudo renderizar el video final (sin salida).');
+  }
+
   await new Promise<void>((resolve, reject) => {
     ffmpeg(videoOutput)
+      .outputOptions(['-threads', String(FFMPEG_THREADS)])
       .on('end', resolve)
       .on('error', reject)
       .screenshots({
@@ -423,13 +453,15 @@ export const processVideoFromPath = async (
       });
   });
 
-  const videoBuffer = await fs.readFile(videoOutput);
-  const thumbBuffer = await fs.readFile(thumbOutput);
+  const thumbStat = await fs.stat(thumbOutput);
+  if (!thumbStat.isFile() || thumbStat.size === 0) {
+    throw new Error('No se pudo generar el thumbnail del video.');
+  }
 
-  const videoUrl = await uploadBuffer(buildKey(shopId, 'reel.mp4'), videoBuffer, 'video/mp4');
-  const thumbnailUrl = await uploadBuffer(
+  const videoUrl = await uploadFileFromPath(buildKey(shopId, 'reel.mp4'), videoOutput, 'video/mp4');
+  const thumbnailUrl = await uploadFileFromPath(
     buildKey(shopId, 'reel-thumb.jpg'),
-    thumbBuffer,
+    thumbOutput,
     'image/jpeg'
   );
 

@@ -22,6 +22,11 @@ const sanitizeAddressDetails = (details: any) => {
     imageUrl,
     storeImageUrl,
     contactName,
+    reference,
+    isGallery,
+    galleryName,
+    galleryLocal,
+    galleryFloor,
   } = details;
   return {
     ...(lat !== undefined ? { lat } : {}),
@@ -36,6 +41,11 @@ const sanitizeAddressDetails = (details: any) => {
     ...(imageUrl ? { imageUrl } : {}),
     ...(storeImageUrl ? { storeImageUrl } : {}),
     ...(contactName ? { contactName } : {}),
+    ...(reference ? { reference } : {}),
+    ...(isGallery !== undefined ? { isGallery: Boolean(isGallery) } : {}),
+    ...(galleryName ? { galleryName } : {}),
+    ...(galleryLocal ? { galleryLocal } : {}),
+    ...(galleryFloor ? { galleryFloor } : {}),
   };
 };
 
@@ -73,7 +83,18 @@ const sanitizeShopBase = (shop: any) => {
     minimumPurchase: shop.minimumPurchase ?? 0,
     paymentMethods: Array.isArray(shop.paymentMethods) ? shop.paymentMethods : [],
     plan: shop.plan,
+    planTier: shop.planTier ?? null,
     status: shop.status,
+    registrationSource: shop.registrationSource ?? null,
+    visibilityState: shop.visibilityState ?? null,
+    verificationState: shop.verificationState ?? null,
+    contactsPublic: shop.contactsPublic !== false,
+    isGallery: Boolean(shop.isGallery),
+    galleryName: shop.galleryName ?? null,
+    galleryLocal: shop.galleryLocal ?? null,
+    galleryFloor: shop.galleryFloor ?? null,
+    addressBase: shop.addressBase ?? null,
+    addressDisplay: shop.addressDisplay ?? null,
     statusReason: shop.statusReason ?? null,
     statusChangedAt: shop.statusChangedAt ?? null,
     ownerAcceptedAt: shop.ownerAcceptedAt ?? null,
@@ -90,6 +111,8 @@ const sanitizeShopBase = (shop: any) => {
     whatsappLines: sanitizeWhatsappLines(shop.whatsappLines),
     ...(shop.authUserId ? { authUserId: shop.authUserId } : {}),
     ...(shop.email ? { email: shop.email } : {}),
+    ...(shop.contactEmailPrivate ? { contactEmailPrivate: shop.contactEmailPrivate } : {}),
+    ...(shop.contactWhatsappPrivate ? { contactWhatsappPrivate: shop.contactWhatsappPrivate } : {}),
     ...(shop.razonSocial ? { razonSocial: shop.razonSocial } : {}),
     ...(shop.cuit ? { cuit: shop.cuit } : {}),
   };
@@ -98,8 +121,20 @@ const sanitizeShopBase = (shop: any) => {
 const applyVisibilityRules = (shop: any, req: Request) => {
   if (!shop) return shop;
   const base = sanitizeShopBase(shop);
+  const hidePublicContacts =
+    base.contactsPublic === false || base.visibilityState === 'DIMMED';
   if (!req.auth) {
-    return { ...base, whatsappLines: [], socialHandles: [] };
+    return {
+      ...base,
+      authUserId: undefined,
+      email: hidePublicContacts ? undefined : base.email,
+      contactEmailPrivate: undefined,
+      contactWhatsappPrivate: undefined,
+      razonSocial: undefined,
+      cuit: undefined,
+      whatsappLines: hidePublicContacts ? [] : base.whatsappLines,
+      socialHandles: hidePublicContacts ? [] : base.socialHandles,
+    };
   }
   if (req.auth.userType === 'ADMIN') {
     return base;
@@ -109,10 +144,14 @@ const applyVisibilityRules = (shop: any, req: Request) => {
   }
   return {
     ...base,
+    email: hidePublicContacts ? undefined : base.email,
     authUserId: undefined,
-    email: undefined,
+    contactEmailPrivate: undefined,
+    contactWhatsappPrivate: undefined,
     razonSocial: undefined,
     cuit: undefined,
+    whatsappLines: hidePublicContacts ? [] : base.whatsappLines,
+    socialHandles: hidePublicContacts ? [] : base.socialHandles,
   };
 };
 
@@ -121,6 +160,12 @@ const sanitizeShopPayload = (payload: any, req: Request) => {
   if (Array.isArray(payload)) return payload.map(sanitizeOne);
   return sanitizeOne(payload);
 };
+
+const buildModerationActor = (req: Request) => ({
+  authUserId: req.auth?.authUserId || null,
+  email: req.auth?.email || null,
+  userType: req.auth?.userType || null,
+});
 
 export const getShops = async (req: Request, res: Response) => {
   const limit = Number(req.query?.limit);
@@ -199,6 +244,23 @@ export const createShop = async (req: Request, res: Response) => {
 };
 // -----------------------------------------------------------------------
 
+export const selfRegisterShop = async (req: Request, res: Response) => {
+  try {
+    const rawUserAgent = req.headers['user-agent'];
+    const userAgent = typeof rawUserAgent === 'string' ? rawUserAgent : null;
+    const data = await ShopsService.createSelfRegisteredShop(req.body, {
+      ip: req.ip,
+      userAgent,
+    });
+    res.status(201).json(sanitizeShopPayload(data, req));
+  } catch (error: any) {
+    const status = Number(error?.status) || 500;
+    res.status(status).json({
+      message: error?.message || 'Error al registrar tienda.',
+    });
+  }
+};
+
 export const updateShop = async (req: Request, res: Response) => {
   try {
     const payload =
@@ -241,7 +303,11 @@ export const togglePenalty = async (req: Request, res: Response) => {
 
 export const activateShop = async (req: Request, res: Response) => {
   try {
-    const data = await ShopsService.activateShop(req.params.id, req.body?.reason);
+    const data = await ShopsService.activateShop(
+      req.params.id,
+      req.body?.reason,
+      buildModerationActor(req)
+    );
     res.json(sanitizeShopPayload(data, req));
   } catch (error) {
     res.status(500).json({ message: 'Error al activar tienda', error });
@@ -250,7 +316,11 @@ export const activateShop = async (req: Request, res: Response) => {
 
 export const rejectShop = async (req: Request, res: Response) => {
   try {
-    const data = await ShopsService.rejectShop(req.params.id, req.body?.reason);
+    const data = await ShopsService.rejectShop(
+      req.params.id,
+      req.body?.reason,
+      buildModerationActor(req)
+    );
     res.json(sanitizeShopPayload(data, req));
   } catch (error) {
     res.status(500).json({ message: 'Error al rechazar tienda', error });
@@ -260,7 +330,12 @@ export const rejectShop = async (req: Request, res: Response) => {
 export const suspendAgenda = async (req: Request, res: Response) => {
   try {
     const days = Number(req.body?.days || 7);
-    const data = await ShopsService.suspendAgenda(req.params.id, req.body?.reason, days);
+    const data = await ShopsService.suspendAgenda(
+      req.params.id,
+      req.body?.reason,
+      days,
+      buildModerationActor(req)
+    );
     res.json(sanitizeShopPayload(data, req));
   } catch (error) {
     res.status(500).json({ message: 'Error al suspender agenda', error });
@@ -269,7 +344,7 @@ export const suspendAgenda = async (req: Request, res: Response) => {
 
 export const liftAgendaSuspension = async (req: Request, res: Response) => {
   try {
-    const data = await ShopsService.liftAgendaSuspension(req.params.id);
+    const data = await ShopsService.liftAgendaSuspension(req.params.id, buildModerationActor(req));
     res.json(sanitizeShopPayload(data, req));
   } catch (error) {
     res.status(500).json({ message: 'Error al levantar sancion', error });

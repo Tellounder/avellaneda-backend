@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import * as ShopsController from '../domains/shops/controller';
 import { requireAdmin, requireShopOrAdmin } from '../middleware/auth';
+import { selfRegisterRateLimit } from '../middleware/rateLimit';
 
 const router = Router();
 
 // --- LÍNEA NUEVA: Habilitamos la creación de tiendas ---
 router.post('/', requireAdmin, ShopsController.createShop);
+router.post('/self-register', selfRegisterRateLimit(), ShopsController.selfRegisterShop);
 // -------------------------------------------------------
 
 router.get('/', ShopsController.getShops);

@@ -92,6 +92,30 @@ enum ShopStatus {
   BANNED
 }
 
+enum ShopRegistrationSource {
+  ADMIN
+  SELF_SERVICE
+}
+
+enum ShopVisibilityState {
+  LIT
+  DIMMED
+  HIDDEN
+}
+
+enum ShopVerificationState {
+  VERIFIED
+  UNVERIFIED
+  REJECTED
+}
+
+enum ShopPlanTier {
+  NONE
+  BASICO
+  MEDIA
+  MAXIMA
+}
+
 enum StreamStatus {
   UPCOMING
   LIVE
@@ -231,7 +255,23 @@ model Shop {
   // -----------------------------
 
   plan            String   @default("BASIC")
+  planTier        ShopPlanTier @default(BASICO)
   status          ShopStatus @default(PENDING_VERIFICATION)
+  registrationSource ShopRegistrationSource @default(ADMIN)
+  visibilityState ShopVisibilityState @default(LIT)
+  verificationState ShopVerificationState @default(VERIFIED)
+  contactsPublic  Boolean @default(true)
+  contactEmailPrivate String?
+  contactWhatsappPrivate String?
+  isGallery       Boolean @default(false)
+  galleryName     String?
+  galleryLocal    String?
+  galleryFloor    String?
+  addressBase     String?
+  addressDisplay  String?
+  normalizedAddressBase String?
+  normalizedName  String?
+  intakeMeta      Json?
   statusReason    String?
   statusChangedAt DateTime?
   ownerAcceptedAt DateTime?
@@ -260,6 +300,10 @@ model Shop {
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  @@index([visibilityState, verificationState])
+  @@index([normalizedAddressBase])
+  @@index([normalizedName])
 }
 
 // ... (deja el resto de los modelos Stream, Reel, etc. como estaban)

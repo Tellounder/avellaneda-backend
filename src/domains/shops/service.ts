@@ -9,7 +9,11 @@ import {
   QuotaActorType,
   QuotaRefType,
   SocialPlatform,
+  ShopPlanTier,
+  ShopRegistrationSource,
   ShopStatus,
+  ShopVerificationState,
+  ShopVisibilityState,
   StreamStatus,
 } from '@prisma/client';
 import { createHash, randomBytes, randomUUID, scryptSync } from 'crypto';
@@ -22,6 +26,46 @@ import { resolvePlanTier } from './plan';
 
 type SocialHandleInput = { platform?: string; handle?: string };
 type WhatsappLineInput = { label?: string; number?: string };
+type SelfRegisterAddressInput = {
+  street?: string;
+  number?: string;
+  city?: string;
+  province?: string;
+  zip?: string;
+  isGallery?: boolean;
+  galleryName?: string;
+  galleryLocal?: string;
+  galleryFloor?: string;
+  reference?: string;
+};
+type SelfRegisterInput = {
+  storeName?: string;
+  logoUrl?: string;
+  email?: string;
+  whatsapp?: string;
+  address?: SelfRegisterAddressInput;
+  consents?: {
+    termsAccepted?: boolean;
+    contactAccepted?: boolean;
+  };
+  intakeMeta?: Record<string, unknown>;
+};
+type ModerationActor = {
+  authUserId?: string | null;
+  email?: string | null;
+  userType?: AuthUserType | null;
+};
+type IntakeMetaAuditEntry = {
+  action: string;
+  at: string;
+  reason?: string | null;
+  actor?: {
+    userType?: string | null;
+    authUserId?: string | null;
+    email?: string | null;
+  };
+  extra?: Record<string, unknown>;
+};
 
 const SOCIAL_PLATFORM_BY_KEY: Record<string, SocialPlatform> = {
   instagram: 'Instagram',
@@ -39,6 +83,13 @@ const MAX_WHATSAPP_LINES = 3;
 
 const TECH_EMAIL_DOMAIN = 'invalid.local';
 const DM_CATALOG_HOSTS = ['distritomoda.com.ar', 'distritomoda.com'];
+const SELF_REGISTER_DEFAULT_COUNTRY = process.env.SELF_REGISTER_GEOCODE_COUNTRY || 'Argentina';
+const SELF_REGISTER_DEFAULT_PROVINCE = process.env.SELF_REGISTER_GEOCODE_PROVINCE || 'Buenos Aires';
+const SELF_REGISTER_DEFAULT_CITY = process.env.SELF_REGISTER_GEOCODE_CITY || 'Avellaneda';
+const NOMINATIM_URL =
+  process.env.SELF_REGISTER_GEOCODE_URL || 'https://nominatim.openstreetmap.org/search';
+const NOMINATIM_USER_AGENT =
+  process.env.SELF_REGISTER_GEOCODE_USER_AGENT || 'avellaneda-backend/1.0 (shops-self-register)';
 
 const normalizeUrlForCompare = (value: string) =>
   value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/g, '');
@@ -73,6 +124,56 @@ const normalizeShopStatus = (value: unknown) => {
 };
 
 const normalizeEmail = (value: unknown) => String(value || '').trim().toLowerCase();
+const normalizePhone = (value: unknown) =>
+  String(value || '')
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/-/g, '');
+const normalizeText = (value: unknown) =>
+  String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+const normalizeForMatch = (value: unknown) =>
+  normalizeText(value)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+const toMetaObject = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return { ...(value as Record<string, unknown>) };
+};
+
+const buildAuditEntry = (
+  action: string,
+  actor?: ModerationActor,
+  reason?: string | null,
+  extra?: Record<string, unknown>
+): IntakeMetaAuditEntry => ({
+  action,
+  at: new Date().toISOString(),
+  reason: reason || null,
+  actor: {
+    userType: actor?.userType || null,
+    authUserId: actor?.authUserId || null,
+    email: actor?.email || null,
+  },
+  ...(extra ? { extra } : {}),
+});
+
+const appendIntakeAudit = (currentMeta: unknown, entry: IntakeMetaAuditEntry) => {
+  const meta = toMetaObject(currentMeta);
+  const trail = Array.isArray(meta.auditTrail) ? meta.auditTrail : [];
+  return {
+    ...meta,
+    auditTrail: [...trail, entry].slice(-120),
+    lastAuditAt: entry.at,
+  };
+};
+const toSlugBase = (value: string) =>
+  normalizeForMatch(value)
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
 
 const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
@@ -157,6 +258,13 @@ export const getWhatsappLimit = (plan: unknown) => {
   return PLAN_WHATSAPP_LIMIT[tier] || 1;
 };
 
+const resolveShopPlanTier = (plan: unknown) => {
+  const tier = resolvePlanTier(plan);
+  if (tier === 'maxima') return ShopPlanTier.MAXIMA;
+  if (tier === 'alta') return ShopPlanTier.MEDIA;
+  return ShopPlanTier.BASICO;
+};
+
 export const filterSocialHandlesByPlan = (
   plan: unknown,
   handles: { platform: SocialPlatform; handle: string }[]
@@ -226,6 +334,144 @@ const buildWhatsappLines = (input: unknown) => {
   return lines;
 };
 
+const buildAddressBase = (input: {
+  street: string;
+  number: string;
+  city: string;
+  province: string;
+}) => `${input.street} ${input.number}, ${input.city}, ${input.province}, ${SELF_REGISTER_DEFAULT_COUNTRY}`;
+
+const buildAddressDisplay = (input: {
+  addressBase: string;
+  isGallery: boolean;
+  galleryName: string | null;
+  galleryLocal: string | null;
+  galleryFloor: string | null;
+}) => {
+  const parts = [input.addressBase];
+  if (input.isGallery && input.galleryName) parts.push(`Galeria ${input.galleryName}`);
+  if (input.isGallery && input.galleryLocal) parts.push(`Local ${input.galleryLocal}`);
+  if (input.isGallery && input.galleryFloor) parts.push(`Piso ${input.galleryFloor}`);
+  return parts.join(' · ');
+};
+
+const ensureUniqueSlug = async (
+  name: string,
+  client: Prisma.TransactionClient | PrismaClient = prisma
+) => {
+  const base = toSlugBase(name) || `tienda-${randomUUID().slice(0, 8)}`;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
+    const existing = await client.shop.findUnique({
+      where: { slug: candidate },
+      select: { id: true },
+    });
+    if (!existing) return candidate;
+  }
+  return `${base}-${Date.now()}`;
+};
+
+const geocodeAddressBase = async (addressBase: string) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const params = new URLSearchParams({
+      q: addressBase,
+      format: 'jsonv2',
+      addressdetails: '1',
+      limit: '1',
+      countrycodes: 'ar',
+    });
+    const response = await fetch(`${NOMINATIM_URL}?${params.toString()}`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': NOMINATIM_USER_AGENT,
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw {
+        status: 503,
+        message: `No se pudo validar la direccion (HTTP ${response.status}).`,
+      };
+    }
+    const payload = (await response.json().catch(() => [])) as Array<{
+      lat?: string;
+      lon?: string;
+    }>;
+    const first = payload[0];
+    const lat = Number(first?.lat);
+    const lng = Number(first?.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      throw {
+        status: 422,
+        message: 'No se pudo geolocalizar la direccion. Revisa calle y altura.',
+      };
+    }
+    return {
+      lat,
+      lng,
+      mapsUrl: `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`,
+    };
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      throw { status: 503, message: 'Timeout al validar direccion en mapa.' };
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const buildSelfRegisterAddress = (rawAddress: SelfRegisterAddressInput | undefined) => {
+  const street = normalizeText(rawAddress?.street);
+  const number = normalizeText(rawAddress?.number);
+  const city = normalizeText(rawAddress?.city || SELF_REGISTER_DEFAULT_CITY);
+  const province = normalizeText(rawAddress?.province || SELF_REGISTER_DEFAULT_PROVINCE);
+  const zip = normalizeText(rawAddress?.zip);
+  const reference = normalizeText(rawAddress?.reference);
+  const isGallery = Boolean(rawAddress?.isGallery);
+  const galleryName = normalizeText(rawAddress?.galleryName) || null;
+  const galleryLocal = normalizeText(rawAddress?.galleryLocal || '').toUpperCase() || null;
+  const galleryFloor = normalizeText(rawAddress?.galleryFloor) || null;
+
+  if (!street || !number || !city || !province) {
+    throw {
+      status: 400,
+      message: 'Direccion incompleta. Completa calle, altura, ciudad y provincia.',
+    };
+  }
+  if (isGallery && !galleryLocal) {
+    throw { status: 400, message: 'Si es galeria, debes indicar el numero de local.' };
+  }
+
+  const addressBase = buildAddressBase({ street, number, city, province });
+  const addressDisplay = buildAddressDisplay({
+    addressBase: `${street} ${number}, ${city}`,
+    isGallery,
+    galleryName,
+    galleryLocal,
+    galleryFloor,
+  });
+
+  return {
+    street,
+    number,
+    city,
+    province,
+    zip: zip || null,
+    reference: reference || null,
+    isGallery,
+    galleryName,
+    galleryLocal,
+    galleryFloor,
+    addressBase,
+    addressDisplay,
+    normalizedAddressBase: normalizeForMatch(addressBase),
+  };
+};
+
 
 const shopSelectBase = {
   id: true,
@@ -242,7 +488,23 @@ const shopSelectBase = {
   minimumPurchase: true,
   paymentMethods: true,
   plan: true,
+  planTier: true,
   status: true,
+  registrationSource: true,
+  visibilityState: true,
+  verificationState: true,
+  contactsPublic: true,
+  contactEmailPrivate: true,
+  contactWhatsappPrivate: true,
+  isGallery: true,
+  galleryName: true,
+  galleryLocal: true,
+  galleryFloor: true,
+  addressBase: true,
+  addressDisplay: true,
+  normalizedAddressBase: true,
+  normalizedName: true,
+  intakeMeta: true,
   statusReason: true,
   statusChangedAt: true,
   ownerAcceptedAt: true,
@@ -342,7 +604,10 @@ export const getShopsMapData = async () => {
   const shops = await prisma.shop.findMany({
     where: {
       active: true,
-      status: ShopStatus.ACTIVE,
+      OR: [
+        { status: ShopStatus.ACTIVE },
+        { visibilityState: ShopVisibilityState.DIMMED },
+      ],
     },
     include: {
       socialHandles: true,
@@ -353,7 +618,10 @@ export const getShopsMapData = async () => {
   return shops.map((shop) => {
     const filteredHandles = filterSocialHandlesByPlan(shop.plan, shop.socialHandles || []);
     const details = (shop.addressDetails || {}) as Record<string, unknown>;
-    const whatsapp = shop.whatsappLines?.[0]?.number || '';
+    const publicContactsEnabled =
+      shop.contactsPublic !== false && shop.visibilityState !== ShopVisibilityState.DIMMED;
+    const effectiveHandles = publicContactsEnabled ? filteredHandles : [];
+    const whatsapp = publicContactsEnabled ? shop.whatsappLines?.[0]?.number || '' : '';
     const legacyUid = toMapString(details.legacyUid || '');
     const legacyUser = toMapString(details.legacyUser || '');
     const legacyUserType = toMapString(details.legacyUserType || '');
@@ -364,7 +632,7 @@ export const getShopsMapData = async () => {
       'Tipo de Usuario': legacyUserType || 'tienda',
       'Usuario': legacyUser || shop.slug || shop.name || '',
       'Nombre completo': shop.name || '',
-      'Mail': toMapString(shop.email),
+      'Mail': publicContactsEnabled ? toMapString(shop.email) : '',
       'Celular': toMapString(whatsapp),
       'Mínimo de Compra': shop.minimumPurchase ?? 0,
       'Calle': getAddressField(details, 'street'),
@@ -372,10 +640,11 @@ export const getShopsMapData = async () => {
       'Ciudad': getAddressField(details, 'city'),
       'Provincia': getAddressField(details, 'province'),
       'Plan de Suscripcion': toMapString(shop.plan),
+      'Estado de visibilidad': toMapString(shop.visibilityState),
       'Logo_URL': toMapString(shop.logoUrl),
       'imagen_destacada_url': toMapString(shop.coverUrl),
       'url_catalogo': toMapString(details.catalogUrl),
-      'Instagram_URL': getSocialUrl(filteredHandles, 'Instagram'),
+      'Instagram_URL': getSocialUrl(effectiveHandles, 'Instagram'),
       'url_tienda': toMapString(shop.website),
       'url_imagen': toMapString(details.imageUrl),
       'imagen_tienda_url': toMapString(details.storeImageUrl),
@@ -419,7 +688,10 @@ export const getPublicShops = async (options?: { limit?: number; offset?: number
   const shops = await prisma.shop.findMany({
     where: {
       active: true,
-      status: ShopStatus.ACTIVE,
+      OR: [
+        { status: ShopStatus.ACTIVE },
+        { visibilityState: ShopVisibilityState.DIMMED },
+      ],
     },
     orderBy: { name: 'asc' },
     select: shopPublicSelect,
@@ -456,7 +728,10 @@ export const getPublicShopsByLetter = async (
   const shops = await prisma.shop.findMany({
     where: {
       active: true,
-      status: ShopStatus.ACTIVE,
+      OR: [
+        { status: ShopStatus.ACTIVE },
+        { visibilityState: ShopVisibilityState.DIMMED },
+      ],
       name: {
         startsWith: initial,
         mode: 'insensitive',
@@ -589,6 +864,154 @@ export const getShopById = async (id: string) => {
   };
 };
 
+export const createSelfRegisteredShop = async (
+  input: SelfRegisterInput,
+  context?: { ip?: string | null; userAgent?: string | null }
+) => {
+  const storeName = normalizeText(input?.storeName);
+  const normalizedName = normalizeForMatch(storeName);
+  const logoUrl = normalizeText(input?.logoUrl) || null;
+  const email = normalizeEmail(input?.email);
+  const whatsapp = normalizePhone(input?.whatsapp);
+  const termsAccepted = Boolean(input?.consents?.termsAccepted);
+  const contactAccepted = Boolean(input?.consents?.contactAccepted);
+  const address = buildSelfRegisterAddress(input?.address);
+
+  if (!storeName || storeName.length < 2) {
+    throw { status: 400, message: 'Nombre de tienda invalido.' };
+  }
+  if (!email || !isValidEmail(email)) {
+    throw { status: 400, message: 'Email invalido.' };
+  }
+  if (!whatsapp || !isValidWhatsappNumber(whatsapp)) {
+    throw { status: 400, message: 'WhatsApp invalido. Usa formato internacional (+549...).' };
+  }
+  if (!termsAccepted || !contactAccepted) {
+    throw { status: 400, message: 'Debes aceptar terminos y contacto para continuar.' };
+  }
+
+  const duplicateByContact = await prisma.shop.findFirst({
+    where: {
+      OR: [
+        { contactEmailPrivate: { equals: email, mode: 'insensitive' } },
+        { contactWhatsappPrivate: { equals: whatsapp, mode: 'insensitive' } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (duplicateByContact) {
+    throw {
+      status: 409,
+      message: 'Ya existe una tienda registrada con ese email o WhatsApp.',
+    };
+  }
+
+  if (address.isGallery && address.galleryLocal) {
+    const duplicateByAddressLocal = await prisma.shop.findFirst({
+      where: {
+        normalizedAddressBase: address.normalizedAddressBase,
+        galleryLocal: address.galleryLocal,
+      },
+      select: { id: true, name: true },
+    });
+    if (duplicateByAddressLocal) {
+      throw {
+        status: 409,
+        message: `Ya existe una tienda registrada en ese local (${address.galleryLocal}).`,
+      };
+    }
+  }
+
+  const duplicateByAddressAndName = await prisma.shop.findFirst({
+    where: {
+      normalizedAddressBase: address.normalizedAddressBase,
+      normalizedName,
+      OR: [{ galleryLocal: address.galleryLocal }, { galleryLocal: null }],
+    },
+    select: { id: true },
+  });
+  if (duplicateByAddressAndName) {
+    throw {
+      status: 409,
+      message: 'Ya existe una tienda con ese nombre en esa direccion.',
+    };
+  }
+
+  const geocode = await geocodeAddressBase(address.addressBase);
+  const baseIntakeMeta = {
+    ...(input?.intakeMeta && typeof input.intakeMeta === 'object' ? input.intakeMeta : {}),
+    source: 'self_register',
+    ip: context?.ip || null,
+    userAgent: context?.userAgent || null,
+    termsAcceptedAt: new Date().toISOString(),
+  };
+
+  const createdShop = await prisma.$transaction(async (tx) => {
+    const slug = await ensureUniqueSlug(storeName, tx);
+    return tx.shop.create({
+      data: {
+        name: storeName,
+        slug,
+        logoUrl,
+        plan: 'MAP_ONLY',
+        planTier: ShopPlanTier.NONE,
+        status: ShopStatus.PENDING_VERIFICATION,
+        registrationSource: ShopRegistrationSource.SELF_SERVICE,
+        visibilityState: ShopVisibilityState.DIMMED,
+        verificationState: ShopVerificationState.UNVERIFIED,
+        contactsPublic: false,
+        contactEmailPrivate: email,
+        contactWhatsappPrivate: whatsapp,
+        isGallery: address.isGallery,
+        galleryName: address.galleryName,
+        galleryLocal: address.galleryLocal,
+        galleryFloor: address.galleryFloor,
+        addressBase: address.addressBase,
+        addressDisplay: address.addressDisplay,
+        normalizedAddressBase: address.normalizedAddressBase,
+        normalizedName,
+        intakeMeta: appendIntakeAudit(
+          baseIntakeMeta,
+          buildAuditEntry('SELF_REGISTER_CREATED', undefined, null, {
+            source: 'self_register',
+          })
+        ),
+        address: address.addressDisplay,
+        addressDetails: {
+          street: address.street,
+          number: address.number,
+          city: address.city,
+          province: address.province,
+          zip: address.zip,
+          reference: address.reference,
+          isGallery: address.isGallery,
+          galleryName: address.galleryName,
+          galleryLocal: address.galleryLocal,
+          galleryFloor: address.galleryFloor,
+          lat: geocode.lat,
+          lng: geocode.lng,
+          mapsUrl: geocode.mapsUrl,
+        },
+        minimumPurchase: 0,
+        paymentMethods: [],
+        statusReason: 'Autoregistro pendiente de revision.',
+        statusChangedAt: new Date(),
+        streamQuota: 0,
+        reelQuota: 0,
+        active: true,
+      },
+      select: shopPrivateSelect,
+    });
+  });
+
+  await notifyAdmins(`Nueva tienda auto-registrada: ${createdShop.name}.`, {
+    type: NotificationType.SYSTEM,
+    refId: createdShop.id,
+  });
+
+  return createdShop;
+};
+
 export const createShop = async (data: any) => {
   const socialHandles = buildSocialHandles(data.socialHandles);
   const whatsappLines = buildWhatsappLines(data.whatsappLines);
@@ -693,7 +1116,17 @@ export const createShop = async (data: any) => {
         minimumPurchase: data.minimumPurchase || 0,
         paymentMethods: data.paymentMethods || [],
         plan: data.plan || 'ESTANDAR',
+        planTier: resolveShopPlanTier(data.plan || 'ESTANDAR'),
         status,
+        registrationSource: ShopRegistrationSource.ADMIN,
+        visibilityState: status === ShopStatus.ACTIVE ? ShopVisibilityState.LIT : ShopVisibilityState.HIDDEN,
+        verificationState:
+          status === ShopStatus.BANNED
+            ? ShopVerificationState.REJECTED
+            : status === ShopStatus.ACTIVE
+              ? ShopVerificationState.VERIFIED
+              : ShopVerificationState.UNVERIFIED,
+        contactsPublic: true,
         statusChangedAt: new Date(),
         streamQuota,
         reelQuota,
@@ -783,6 +1216,22 @@ export const updateShop = async (id: string, data: any) => {
     agendaSuspendedByAdminId: data.agendaSuspendedByAdminId,
     agendaSuspendedReason: data.agendaSuspendedReason,
     plan: data.plan,
+    planTier: data.plan !== undefined ? resolveShopPlanTier(data.plan) : undefined,
+    registrationSource: data.registrationSource,
+    visibilityState: data.visibilityState,
+    verificationState: data.verificationState,
+    contactsPublic: data.contactsPublic,
+    contactEmailPrivate: data.contactEmailPrivate,
+    contactWhatsappPrivate: data.contactWhatsappPrivate,
+    isGallery: data.isGallery,
+    galleryName: data.galleryName,
+    galleryLocal: data.galleryLocal,
+    galleryFloor: data.galleryFloor,
+    addressBase: data.addressBase,
+    addressDisplay: data.addressDisplay,
+    normalizedAddressBase: data.normalizedAddressBase,
+    normalizedName: data.normalizedName,
+    intakeMeta: data.intakeMeta,
     streamQuota: data.streamQuota,
     reelQuota: data.reelQuota,
   };
@@ -871,6 +1320,10 @@ export const acceptShop = async (id: string, authUserId: string) => {
         ...(canAutoApprove
           ? {
               status: ShopStatus.ACTIVE,
+              visibilityState: ShopVisibilityState.LIT,
+              verificationState: ShopVerificationState.VERIFIED,
+              contactsPublic: true,
+              planTier: resolveShopPlanTier(shop.plan),
               statusReason: null,
               statusChangedAt: new Date(),
               active: true,
@@ -1081,18 +1534,36 @@ export const togglePenalty = async (id: string) => {
   throw new Error('Penalty legacy desactivado. Usar suspension de agenda y auditoria.');
 };
 
-export const activateShop = async (id: string, reason?: string) => {
+export const activateShop = async (id: string, reason?: string, actor?: ModerationActor) => {
   return prisma.$transaction(async (tx) => {
+    const currentShop = await tx.shop.findUnique({
+      where: { id },
+      select: { intakeMeta: true },
+    });
+    if (!currentShop) {
+      throw new Error('Tienda no encontrada.');
+    }
+
     const updatedShop = await tx.shop.update({
       where: { id },
       data: {
         status: ShopStatus.ACTIVE,
+        visibilityState: ShopVisibilityState.LIT,
+        verificationState: ShopVerificationState.VERIFIED,
+        contactsPublic: true,
         statusReason: reason || null,
         statusChangedAt: new Date(),
         active: true,
         agendaSuspendedUntil: null,
         agendaSuspendedByAdminId: null,
         agendaSuspendedReason: null,
+        intakeMeta: appendIntakeAudit(
+          currentShop.intakeMeta,
+          buildAuditEntry('SHOP_ACTIVATED', actor, reason || null, {
+            status: ShopStatus.ACTIVE,
+            visibilityState: ShopVisibilityState.LIT,
+          })
+        ),
       },
       include: {
         socialHandles: true,
@@ -1106,8 +1577,21 @@ export const activateShop = async (id: string, reason?: string) => {
   });
 };
 
-export const suspendAgenda = async (id: string, reason?: string, days = 7) => {
+export const suspendAgenda = async (
+  id: string,
+  reason?: string,
+  days = 7,
+  actor?: ModerationActor
+) => {
   const suspendedUntil = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const currentShop = await prisma.shop.findUnique({
+    where: { id },
+    select: { intakeMeta: true },
+  });
+  if (!currentShop) {
+    throw new Error('Tienda no encontrada.');
+  }
+
   const updatedShop = await prisma.shop.update({
     where: { id },
     data: {
@@ -1116,6 +1600,13 @@ export const suspendAgenda = async (id: string, reason?: string, days = 7) => {
       statusChangedAt: new Date(),
       agendaSuspendedUntil: suspendedUntil,
       agendaSuspendedReason: reason || 'Agenda suspendida',
+      intakeMeta: appendIntakeAudit(
+        currentShop.intakeMeta,
+        buildAuditEntry('AGENDA_SUSPENDED', actor, reason || null, {
+          suspendedUntil: suspendedUntil.toISOString(),
+          days,
+        })
+      ),
     },
     include: {
       socialHandles: true,
@@ -1173,17 +1664,33 @@ export const suspendAgenda = async (id: string, reason?: string, days = 7) => {
   return updatedShop;
 };
 
-export const liftAgendaSuspension = async (id: string) => {
+export const liftAgendaSuspension = async (id: string, actor?: ModerationActor) => {
   return prisma.$transaction(async (tx) => {
+    const currentShop = await tx.shop.findUnique({
+      where: { id },
+      select: { intakeMeta: true },
+    });
+    if (!currentShop) {
+      throw new Error('Tienda no encontrada.');
+    }
+
     const updatedShop = await tx.shop.update({
       where: { id },
       data: {
         status: ShopStatus.ACTIVE,
+        visibilityState: ShopVisibilityState.LIT,
+        verificationState: ShopVerificationState.VERIFIED,
         statusReason: null,
         statusChangedAt: new Date(),
         agendaSuspendedUntil: null,
         agendaSuspendedReason: null,
         agendaSuspendedByAdminId: null,
+        intakeMeta: appendIntakeAudit(
+          currentShop.intakeMeta,
+          buildAuditEntry('AGENDA_SUSPENSION_LIFTED', actor, null, {
+            status: ShopStatus.ACTIVE,
+          })
+        ),
       },
       include: {
         socialHandles: true,
@@ -1197,14 +1704,32 @@ export const liftAgendaSuspension = async (id: string) => {
   });
 };
 
-export const rejectShop = async (id: string, reason?: string) => {
+export const rejectShop = async (id: string, reason?: string, actor?: ModerationActor) => {
   return prisma.$transaction(async (tx) => {
+    const currentShop = await tx.shop.findUnique({
+      where: { id },
+      select: { intakeMeta: true },
+    });
+    if (!currentShop) {
+      throw new Error('Tienda no encontrada.');
+    }
+
     const updatedShop = await tx.shop.update({
       where: { id },
       data: {
         status: ShopStatus.HIDDEN,
+        visibilityState: ShopVisibilityState.HIDDEN,
+        verificationState: ShopVerificationState.REJECTED,
+        contactsPublic: false,
         statusReason: reason || 'Solicitud rechazada',
         statusChangedAt: new Date(),
+        intakeMeta: appendIntakeAudit(
+          currentShop.intakeMeta,
+          buildAuditEntry('SHOP_REJECTED', actor, reason || null, {
+            status: ShopStatus.HIDDEN,
+            visibilityState: ShopVisibilityState.HIDDEN,
+          })
+        ),
       },
       include: {
         socialHandles: true,

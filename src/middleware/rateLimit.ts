@@ -41,3 +41,32 @@ export const rateLimit = () => {
     return next();
   };
 };
+
+const selfRegisterBuckets = new Map<string, Bucket>();
+
+export const selfRegisterRateLimit = () => {
+  const windowMs = Number(process.env.SELF_REGISTER_RATE_LIMIT_WINDOW_MS || 3_600_000);
+  const maxRequests = Number(process.env.SELF_REGISTER_RATE_LIMIT_MAX || 10);
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== 'POST') return next();
+    const key = `self-register:${getClientKey(req)}`;
+    const now = Date.now();
+    const bucket = selfRegisterBuckets.get(key);
+
+    if (!bucket || bucket.resetAt <= now) {
+      selfRegisterBuckets.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    bucket.count += 1;
+    if (bucket.count > maxRequests) {
+      res.setHeader('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)));
+      return res.status(429).json({
+        message: 'Demasiados registros desde esta red. Intenta nuevamente mas tarde.',
+      });
+    }
+
+    return next();
+  };
+};

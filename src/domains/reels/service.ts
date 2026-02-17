@@ -8,6 +8,8 @@ import {
   ReelType,
   SocialPlatform,
 } from '@prisma/client';
+import http from 'http';
+import https from 'https';
 import prisma from './repo';
 import { createQuotaTransaction, reserveReelQuota } from '../../services/quota.service';
 
@@ -134,6 +136,95 @@ const clampDuration = (value: number | undefined, fallback: number) => {
   return Math.max(5, Math.min(10, Math.floor(value)));
 };
 
+const ENFORCE_SINGLE_PROCESSING_PER_SHOP =
+  String(process.env.REEL_SINGLE_PROCESSING_PER_SHOP || 'true').toLowerCase() !== 'false';
+const MEDIA_VALIDATION_TIMEOUT_MS = Math.max(
+  3_000,
+  Number(process.env.REEL_MEDIA_VALIDATION_TIMEOUT_MS || 15_000)
+);
+const MEDIA_VALIDATION_MAX_REDIRECTS = 3;
+
+type MediaExpectation = 'video' | 'image';
+
+const inspectRemoteMedia = async (
+  url: string,
+  method: 'HEAD' | 'GET' = 'HEAD',
+  redirects = 0
+): Promise<{ contentType: string; contentLength: number | null }> => {
+  if (redirects > MEDIA_VALIDATION_MAX_REDIRECTS) {
+    throw new Error('Demasiadas redirecciones validando el archivo.');
+  }
+  const client = url.startsWith('https') ? https : http;
+
+  return new Promise<{ contentType: string; contentLength: number | null }>((resolve, reject) => {
+    const req = client.request(url, { method }, (res) => {
+      const status = res.statusCode || 0;
+      if ([301, 302, 307, 308].includes(status) && res.headers.location) {
+        res.resume();
+        const nextUrl = new URL(res.headers.location, url).toString();
+        inspectRemoteMedia(nextUrl, method, redirects + 1).then(resolve).catch(reject);
+        return;
+      }
+
+      if (status === 405 && method === 'HEAD') {
+        res.resume();
+        inspectRemoteMedia(url, 'GET', redirects).then(resolve).catch(reject);
+        return;
+      }
+
+      if (status >= 400) {
+        res.resume();
+        reject(new Error(`No se pudo validar el archivo subido (HTTP ${status}).`));
+        return;
+      }
+
+      const contentType = String(res.headers['content-type'] || '').toLowerCase();
+      const contentLengthRaw = res.headers['content-length'];
+      const contentLength = contentLengthRaw ? Number(contentLengthRaw) : null;
+      res.resume();
+      resolve({
+        contentType,
+        contentLength: Number.isFinite(contentLength) ? contentLength : null,
+      });
+    });
+
+    req.setTimeout(MEDIA_VALIDATION_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Timeout validando archivo (${MEDIA_VALIDATION_TIMEOUT_MS}ms).`));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+};
+
+const ensureMediaUrlReady = async (url: string, expectation: MediaExpectation) => {
+  const normalized = String(url || '').trim();
+  if (!normalized) {
+    throw new Error('Falta URL de archivo para publicar.');
+  }
+
+  let inspected: { contentType: string; contentLength: number | null };
+  try {
+    inspected = await inspectRemoteMedia(normalized, 'HEAD');
+  } catch (error) {
+    throw new Error(
+      error instanceof Error ? error.message : 'No se pudo validar el archivo en storage.'
+    );
+  }
+
+  const expectedPrefix = expectation === 'video' ? 'video/' : 'image/';
+  if (inspected.contentType && !inspected.contentType.startsWith(expectedPrefix)) {
+    throw new Error(
+      expectation === 'video'
+        ? 'El archivo subido no es un video valido.'
+        : 'El archivo subido no es una imagen valida.'
+    );
+  }
+
+  if (inspected.contentLength !== null && inspected.contentLength <= 0) {
+    throw new Error('El archivo subido esta vacio.');
+  }
+};
+
 export const createReel = async (
   input: CreateReelInput,
   options?: { isAdminOverride?: boolean }
@@ -167,9 +258,39 @@ export const createReel = async (
     }
   }
 
+  if (normalizedType === ReelType.VIDEO) {
+    if (!videoUrl) {
+      throw new Error('Se requiere videoUrl para reels de video.');
+    }
+    await ensureMediaUrlReady(videoUrl, 'video');
+  }
+
+  if (normalizedType === ReelType.PHOTO_SET) {
+    for (const url of photoUrls) {
+      await ensureMediaUrlReady(url, 'image');
+    }
+  }
+
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
   return prisma.$transaction(
     async (tx) => {
+      if (!isAdminOverride && ENFORCE_SINGLE_PROCESSING_PER_SHOP) {
+        const existingProcessing = await tx.reel.findFirst({
+          where: {
+            shopId: input.shopId,
+            hidden: false,
+            status: ReelStatus.PROCESSING,
+            expiresAt: { gte: new Date() },
+          },
+          select: { id: true },
+        });
+        if (existingProcessing) {
+          throw new Error(
+            'Ya tenes una historia en procesamiento. Espera que termine para publicar otra.'
+          );
+        }
+      }
+
       const reservation = isAdminOverride
         ? null
         : await reserveReelQuota(input.shopId, new Date(), tx);

@@ -55,7 +55,11 @@ export const cacheMiddleware =
     };
 
     res.send = (body: any) => {
-      responseBody = body;
+      // When res.json() is used, Express internally calls res.send(stringifiedJson).
+      // Keep the original JSON payload in cache, otherwise we may cache a string.
+      if (!isJson) {
+        responseBody = body;
+      }
       return originalSend(body);
     };
 
@@ -74,4 +78,3 @@ export const cacheMiddleware =
     res.setHeader('X-Cache', 'MISS');
     return next();
   };
-

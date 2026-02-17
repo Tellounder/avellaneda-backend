@@ -240,3 +240,30 @@ export const uploadQaReportHtml = async ({
     publicUrl: data.publicUrl,
   };
 };
+
+export const downloadQaReportHtml = async (path: string) => {
+  assertSupabaseConfigured();
+  if (!path) {
+    throw new Error('Path requerido.');
+  }
+
+  const normalized = String(path).trim();
+  const invalidPath =
+    normalized.includes('..') ||
+    !normalized.startsWith('reports/') ||
+    !normalized.toLowerCase().endsWith('.html');
+  if (invalidPath) {
+    throw new Error('Path de reporte invalido.');
+  }
+
+  const { data, error } = await supabase.storage.from(reportsBucket).download(normalized);
+  if (error || !data) {
+    throw new Error(error?.message || 'No se pudo descargar el reporte HTML.');
+  }
+
+  return {
+    html: await data.text(),
+    bucket: reportsBucket,
+    path: normalized,
+  };
+};

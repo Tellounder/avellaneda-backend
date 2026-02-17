@@ -4,6 +4,7 @@ import path from 'path';
 import {
   confirmReelUploadPaths,
   createSignedUploadUrls,
+  downloadQaReportHtml,
   uploadQaReportHtml,
   uploadShopImage as uploadShopImageToStorage,
 } from './service';
@@ -266,8 +267,13 @@ export const uploadReportHtml = async (req: Request, res: Response) => {
       testerName,
     });
 
+    const backendBaseUrl =
+      (process.env.PUBLIC_BACKEND_URL || '').trim() || `${req.protocol}://${req.get('host')}`;
+    const viewUrl = `${backendBaseUrl.replace(/\/+$/, '')}/storage/reports/view?path=${encodeURIComponent(uploaded.path)}`;
+
     return res.json({
-      url: uploaded.publicUrl,
+      url: viewUrl,
+      rawUrl: uploaded.publicUrl,
       bucket: uploaded.bucket,
       path: uploaded.path,
     });
@@ -277,5 +283,22 @@ export const uploadReportHtml = async (req: Request, res: Response) => {
     if (file?.path) {
       await fs.unlink(file.path).catch(() => undefined);
     }
+  }
+};
+
+export const viewReportHtml = async (req: Request, res: Response) => {
+  const rawPath = String(req.query?.path || '').trim();
+  if (!rawPath) {
+    return res.status(400).send('path requerido');
+  }
+
+  try {
+    const report = await downloadQaReportHtml(rawPath);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'public, max-age=60');
+    return res.send(report.html);
+  } catch (error: any) {
+    return res.status(404).send(error?.message || 'No se pudo abrir el reporte HTML.');
   }
 };

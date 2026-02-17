@@ -26,10 +26,19 @@ import { errorHandler } from '../middleware/errorHandler';
 
 const app = express();
 
-const corsOrigins = (process.env.CORS_ORIGINS || '')
+const envCorsOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
+
+const defaultCorsOrigins = [
+  'http://localhost:5173',
+  'https://avellaneda-en-vivo.web.app',
+  'https://avellanedaenvivo.com.ar',
+  'https://www.avellanedaenvivo.com.ar',
+];
+
+const corsOrigins = Array.from(new Set([...defaultCorsOrigins, ...envCorsOrigins]));
 
 app.use(
   cors(

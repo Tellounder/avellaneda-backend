@@ -21,6 +21,14 @@ const FFMPEG_THREADS = Math.max(
   1,
   Math.min(2, Number(process.env.REEL_FFMPEG_THREADS || 1))
 );
+const FFMPEG_TIMEOUT_MS = Math.max(
+  120_000,
+  Number(process.env.REEL_FFMPEG_TIMEOUT_MS || 900_000)
+);
+const MAX_SOURCE_VIDEO_MB = Math.max(
+  10,
+  Number(process.env.REEL_MAX_SOURCE_VIDEO_MB || 120)
+);
 let manropeFontBase64: string | null = null;
 let manropePathLogged = false;
 
@@ -122,6 +130,71 @@ const ensureFfmpeg = () => {
     throw new Error('ffmpeg no disponible en el servidor.');
   }
   ffmpeg.setFfmpegPath(ffmpegPath);
+};
+
+const runFfmpegCommand = async ({
+  command,
+  timeoutMs = FFMPEG_TIMEOUT_MS,
+  timeoutLabel,
+  onProgress,
+  stderrCollector,
+}: {
+  command: any;
+  timeoutMs?: number;
+  timeoutLabel: string;
+  onProgress?: (progress: { percent?: number }) => void;
+  stderrCollector?: string[];
+}) => {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let timeoutHandle: NodeJS.Timeout | null = null;
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+
+    timeoutHandle = setTimeout(() => {
+      try {
+        command.kill('SIGKILL');
+      } catch {
+        // ignore kill errors
+      }
+      finish(new Error(`${timeoutLabel} excedio el timeout (${timeoutMs}ms).`));
+    }, timeoutMs);
+
+    if (onProgress) {
+      command.on('progress', (progress: { percent?: number }) => {
+        onProgress(progress);
+      });
+    }
+
+    if (stderrCollector) {
+      command.on('stderr', (line: string) => {
+        if (stderrCollector.length < 40) stderrCollector.push(line);
+      });
+    }
+
+    command
+      .on('end', () => finish())
+      .on('error', (error: unknown) => {
+        if (error instanceof Error) {
+          finish(error);
+          return;
+        }
+        finish(new Error('Error ffmpeg no identificado.'));
+      });
+
+    command.run();
+  });
 };
 
 const createTempDir = async () => {
@@ -317,7 +390,8 @@ export const processPhotoFromPath = async (
   sourcePath: string,
   tempDir: string,
   editorState?: any,
-  mediaIndex = 0
+  mediaIndex = 0,
+  timeoutMs = FFMPEG_TIMEOUT_MS
 ) => {
   ensureFfmpeg();
   await fs.mkdir(tempDir, { recursive: true });
@@ -332,38 +406,39 @@ export const processPhotoFromPath = async (
   const outputPath = path.join(tempDir, outputName);
   const stderr: string[] = [];
 
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: unknown) => {
-      const details = stderr.length ? `\nffmpeg:\n${stderr.join('\n')}` : '';
-      const message =
-        error instanceof Error ? `${error.message}${details}` : `Error procesando imagen.${details}`;
-      reject(new Error(message));
-    };
-    const command = ffmpeg(sourcePath);
-    if (overlayPath) {
-      command.input(overlayPath);
+  const command = ffmpeg(sourcePath);
+  if (overlayPath) {
+    command.input(overlayPath);
+  }
+  command
+    .complexFilter(filter)
+    .outputOptions([
+      '-map',
+      `[${outputLabel}]`,
+      '-frames:v',
+      '1',
+      '-q:v',
+      '4',
+      '-update',
+      '1',
+      '-y',
+    ])
+    .output(outputPath);
+
+  try {
+    await runFfmpegCommand({
+      command,
+      timeoutMs,
+      timeoutLabel: `Render de foto ${mediaIndex + 1}`,
+      stderrCollector: stderr,
+    });
+  } catch (error) {
+    const details = stderr.length ? `\nffmpeg:\n${stderr.join('\n')}` : '';
+    if (error instanceof Error) {
+      throw new Error(`${error.message}${details}`);
     }
-    command
-      .complexFilter(filter)
-      .outputOptions([
-        '-map',
-        `[${outputLabel}]`,
-        '-frames:v',
-        '1',
-        '-q:v',
-        '4',
-        '-update',
-        '1',
-        '-y',
-      ])
-      .output(outputPath)
-      .on('stderr', (line: string) => {
-        if (stderr.length < 20) stderr.push(line);
-      })
-      .on('end', resolve)
-      .on('error', onError)
-      .run();
-  });
+    throw new Error(`Error procesando imagen.${details}`);
+  }
 
   const buffer = await fs.readFile(outputPath);
   if (!buffer.length) {
@@ -379,7 +454,8 @@ export const processVideoFromPath = async (
   sourcePath: string,
   tempDir: string,
   editorState?: any,
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: number) => void,
+  timeoutMs = FFMPEG_TIMEOUT_MS
 ) => {
   ensureFfmpeg();
   await fs.mkdir(tempDir, { recursive: true });
@@ -387,52 +463,67 @@ export const processVideoFromPath = async (
   if (!sourceStat.isFile() || sourceStat.size === 0) {
     throw new Error(`Archivo fuente invalido o vacio: ${sourcePath}`);
   }
+  const sourceSizeMb = sourceStat.size / (1024 * 1024);
+  if (sourceSizeMb > MAX_SOURCE_VIDEO_MB) {
+    throw new Error(
+      `Video demasiado pesado (${sourceSizeMb.toFixed(1)}MB). Maximo permitido: ${MAX_SOURCE_VIDEO_MB}MB.`
+    );
+  }
   const videoOutput = path.join(tempDir, 'out.mp4');
   const thumbOutput = path.join(tempDir, 'out-thumb.jpg');
   const overlayPath = await buildStickerOverlay(editorState, tempDir);
   const { filter, outputLabel } = buildEditorFilter(editorState, 0, Boolean(overlayPath));
 
-  await new Promise<void>((resolve, reject) => {
-    const command = ffmpeg(sourcePath);
-    if (overlayPath) {
-      command.input(overlayPath).inputOptions(['-loop', '1']);
-    }
-    command
-      .complexFilter(filter)
-      .outputOptions([
-        '-map',
-        `[${outputLabel}]`,
-        '-map',
-        '0:a?',
-        '-c:v',
-        'libx264',
-        '-threads',
-        String(FFMPEG_THREADS),
-        '-preset',
-        'veryfast',
-        '-crf',
-        '28',
-        '-movflags',
-        '+faststart',
-        '-pix_fmt',
-        'yuv420p',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '128k',
-        '-shortest',
-        '-y',
-      ])
-      .output(videoOutput)
-      .on('progress', (progress: { percent?: number }) => {
-        const percent = Number(progress?.percent);
-        if (Number.isFinite(percent)) {
-          onProgress?.(percent);
-        }
-      })
-      .on('end', resolve)
-      .on('error', reject)
-      .run();
+  const renderCommand = ffmpeg(sourcePath);
+  if (overlayPath) {
+    renderCommand.input(overlayPath).inputOptions(['-loop', '1']);
+  }
+  renderCommand
+    .complexFilter(filter)
+    .outputOptions([
+      '-map',
+      `[${outputLabel}]`,
+      '-map',
+      '0:a?',
+      '-c:v',
+      'libx264',
+      '-threads',
+      String(FFMPEG_THREADS),
+      '-preset',
+      'veryfast',
+      '-crf',
+      '28',
+      '-r',
+      '30',
+      '-maxrate',
+      '1800k',
+      '-bufsize',
+      '3600k',
+      '-g',
+      '60',
+      '-movflags',
+      '+faststart',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      '-shortest',
+      '-y',
+    ])
+    .output(videoOutput);
+
+  await runFfmpegCommand({
+    command: renderCommand,
+    timeoutMs,
+    timeoutLabel: 'Render de video',
+    onProgress: (progress: { percent?: number }) => {
+      const percent = Number(progress?.percent);
+      if (Number.isFinite(percent)) {
+        onProgress?.(percent);
+      }
+    },
   });
 
   const videoStat = await fs.stat(videoOutput);
@@ -441,10 +532,40 @@ export const processVideoFromPath = async (
   }
 
   await new Promise<void>((resolve, reject) => {
-    ffmpeg(videoOutput)
-      .outputOptions(['-threads', String(FFMPEG_THREADS)])
-      .on('end', resolve)
-      .on('error', reject)
+    const screenshotCommand = ffmpeg(videoOutput).outputOptions([
+      '-threads',
+      String(FFMPEG_THREADS),
+    ]);
+    let settled = false;
+    const timeoutHandle = setTimeout(() => {
+      try {
+        screenshotCommand.kill('SIGKILL');
+      } catch {
+        // ignore kill errors
+      }
+      if (!settled) {
+        settled = true;
+        reject(new Error(`Render de thumbnail excedio el timeout (${timeoutMs}ms).`));
+      }
+    }, timeoutMs);
+
+    screenshotCommand
+      .on('end', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutHandle);
+        resolve();
+      })
+      .on('error', (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutHandle);
+        if (error instanceof Error) {
+          reject(error);
+          return;
+        }
+        reject(new Error('Error al generar thumbnail.'));
+      })
       .screenshots({
         timestamps: ['1'],
         filename: path.basename(thumbOutput),

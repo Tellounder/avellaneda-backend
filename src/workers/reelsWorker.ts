@@ -310,18 +310,15 @@ const processReel = async (reel: {
       if (!stat.size) {
         throw new Error(`Archivo descargado vacio (video): ${sourcePath}`);
       }
-      const { videoUrl, thumbnailUrl } = await withTimeout(
-        processVideoFromPath(
-          reel.shopId,
-          sourcePath,
-          tempDir,
-          reel.editorState,
-          (percent) => {
-            void reportProgress(percent, 'RENDER_VIDEO');
-          }
-        ),
-        PROCESS_TIMEOUT_MS,
-        'Render de video'
+      const { videoUrl, thumbnailUrl } = await processVideoFromPath(
+        reel.shopId,
+        sourcePath,
+        tempDir,
+        reel.editorState,
+        (percent) => {
+          void reportProgress(percent, 'RENDER_VIDEO');
+        },
+        PROCESS_TIMEOUT_MS
       );
       nextVideoUrl = videoUrl;
       nextThumbUrl = thumbnailUrl;
@@ -343,10 +340,13 @@ const processReel = async (reel: {
         if (!stat.size) {
           throw new Error(`Archivo descargado vacio (foto ${index}): ${sourcePath}`);
         }
-        const processedUrl = await withTimeout(
-          processPhotoFromPath(reel.shopId, sourcePath, tempDir, reel.editorState, index),
-          PROCESS_TIMEOUT_MS,
-          `Render de foto ${index + 1}`
+        const processedUrl = await processPhotoFromPath(
+          reel.shopId,
+          sourcePath,
+          tempDir,
+          reel.editorState,
+          index,
+          PROCESS_TIMEOUT_MS
         );
         nextPhotoUrls.push(processedUrl);
         await reportProgress(((index + 1) / totalPhotos) * 100, 'RENDER_PHOTO_SET');

@@ -183,6 +183,30 @@ enum ReelStatus {
   HIDDEN
 }
 
+enum ChatConversationStatus {
+  OPEN
+  ARCHIVED
+  BLOCKED
+}
+
+enum ChatParticipantType {
+  CLIENT
+  SHOP
+}
+
+enum ChatMessageSenderType {
+  CLIENT
+  SHOP
+  SYSTEM
+}
+
+enum ChatMessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  SYSTEM
+}
+
 model AuthUser {
   id           String          @id @default(uuid())
   email        String          @unique
@@ -202,6 +226,9 @@ model AuthUser {
   notifications Notification[]
   reelViews    ReelView[]
   streamLikes  StreamLike[]
+  chatClientConversations ChatConversation[] @relation("ChatClientAuthUser")
+  chatSentMessages ChatMessage[] @relation("ChatMessageSender")
+  chatReadStates ChatConversationRead[] @relation("ChatReadAuthUser")
 }
 
 model Admin {
@@ -220,7 +247,17 @@ model Client {
   authUser    AuthUser @relation(fields: [authUserId], references: [id])
   displayName String?
   avatarUrl   String?
+  phone       String?
+  city        String?
+  province    String?
+  instagramHandle String?
+  birthDate   DateTime?
+  styleTags   String[] @default([])
+  profileCompletedAt DateTime?
+  marketingOptIn Boolean @default(false)
+  lastSeenAt  DateTime?
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 model User {
@@ -297,6 +334,7 @@ model Shop {
   purchaseRequests PurchaseRequest[]
   agendaSuspensions AgendaSuspension[]
   liveScheduleEvents LiveScheduleEvent[]
+  chatConversations ChatConversation[]
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -449,6 +487,63 @@ model Favorite {
   shop   Shop   @relation(fields: [shopId], references: [id])
 
   @@unique([userId, shopId])
+}
+
+model ChatConversation {
+  id               String   @id @default(uuid())
+  clientAuthUserId String
+  clientAuthUser   AuthUser @relation("ChatClientAuthUser", fields: [clientAuthUserId], references: [id])
+  shopId           String
+  shop             Shop     @relation(fields: [shopId], references: [id])
+  status           ChatConversationStatus @default(OPEN)
+  lastMessagePreview String?
+  firstClientMessageAt DateTime?
+  lastClientMessageAt DateTime?
+  lastShopMessageAt DateTime?
+  firstShopResponseAt DateTime?
+  firstResponseSeconds Int?
+  closedAt         DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  messages         ChatMessage[]
+  reads            ChatConversationRead[]
+
+  @@unique([clientAuthUserId, shopId])
+  @@index([shopId, updatedAt])
+  @@index([clientAuthUserId, updatedAt])
+}
+
+model ChatMessage {
+  id               String   @id @default(uuid())
+  conversationId   String
+  conversation     ChatConversation @relation(fields: [conversationId], references: [id])
+  senderType       ChatMessageSenderType
+  senderAuthUserId String?
+  senderAuthUser   AuthUser? @relation("ChatMessageSender", fields: [senderAuthUserId], references: [id])
+  messageType      ChatMessageType @default(TEXT)
+  content          String?
+  attachments      Json?
+  readAt           DateTime?
+  meta             Json?
+  createdAt        DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([senderAuthUserId, createdAt])
+}
+
+model ChatConversationRead {
+  id               String   @id @default(uuid())
+  conversationId   String
+  conversation     ChatConversation @relation(fields: [conversationId], references: [id])
+  participantType  ChatParticipantType
+  participantAuthUserId String
+  participantAuthUser AuthUser @relation("ChatReadAuthUser", fields: [participantAuthUserId], references: [id])
+  lastReadAt       DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([conversationId, participantType])
+  @@index([participantAuthUserId, updatedAt])
 }
 
 model Agenda {

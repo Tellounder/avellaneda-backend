@@ -1,5 +1,12 @@
-﻿import { Request, Response } from 'express';
+import { Request, Response } from 'express';
 import * as ChatService from './service';
+import {
+  buildClientChannel,
+  buildShopChannel,
+  registerRealtimeConnection,
+  resolveShopScope,
+  writeRealtimeEvent,
+} from './realtime';
 
 const ensureClient = (req: Request, res: Response) => {
   if (!req.auth) {
@@ -112,10 +119,15 @@ export const listShopMessages = async (req: Request, res: Response) => {
   if (!auth) return;
 
   try {
-    const data = await ChatService.listShopMessages(auth.authUserId, req.params.conversationId, {
-      limit: req.query.limit,
-      before: req.query.before,
-    }, getShopScope(req));
+    const data = await ChatService.listShopMessages(
+      auth.authUserId,
+      req.params.conversationId,
+      {
+        limit: req.query.limit,
+        before: req.query.before,
+      },
+      getShopScope(req)
+    );
     res.json({ items: data });
   } catch (error: any) {
     res.status(400).json({ message: error?.message || 'Error al cargar mensajes.', error });
@@ -153,4 +165,64 @@ export const markShopConversationRead = async (req: Request, res: Response) => {
   } catch (error: any) {
     res.status(400).json({ message: error?.message || 'Error al marcar lectura.', error });
   }
+};
+
+export const streamEvents = async (req: Request, res: Response) => {
+  if (!req.auth) {
+    return res.status(401).json({ message: 'Autenticacion requerida.' });
+  }
+  if (req.auth.status === 'SUSPENDED') {
+    return res.status(403).json({ message: 'Usuario suspendido.' });
+  }
+
+  let channel = '';
+  try {
+    if (req.auth.userType === 'CLIENT') {
+      channel = buildClientChannel(req.auth.authUserId);
+    } else if (req.auth.userType === 'SHOP') {
+      const scopedShopId = getShopScope(req);
+      const scopedShop = await resolveShopScope(req.auth.authUserId, scopedShopId);
+      channel = buildShopChannel(scopedShop.id);
+    } else {
+      return res.status(403).json({ message: 'Solo clientes y tiendas pueden usar chat en tiempo real.' });
+    }
+  } catch (error: any) {
+    return res.status(400).json({ message: error?.message || 'No se pudo abrir el stream de chat.', error });
+  }
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
+
+  const unregister = registerRealtimeConnection(channel, res);
+  writeRealtimeEvent(res, 'chat:connected', {
+    ok: true,
+    channel,
+    at: new Date().toISOString(),
+  });
+
+  const heartbeat = setInterval(() => {
+    writeRealtimeEvent(res, 'chat:ping', { at: new Date().toISOString() });
+  }, 25_000);
+
+  let closed = false;
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    unregister();
+    if (!res.writableEnded) {
+      res.end();
+    }
+  };
+
+  req.on('close', cleanup);
+  req.on('aborted', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
 };

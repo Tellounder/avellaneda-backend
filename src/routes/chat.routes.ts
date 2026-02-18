@@ -10,6 +10,8 @@ router.get('/client/conversations/:conversationId/messages', requireAuth, ChatCo
 router.post('/client/conversations/:conversationId/messages', requireAuth, ChatController.sendClientMessage);
 router.post('/client/conversations/:conversationId/read', requireAuth, ChatController.markClientConversationRead);
 
+router.get('/events/stream', requireAuth, ChatController.streamEvents);
+
 router.get('/shop/conversations', requireAuth, ChatController.listShopConversations);
 router.get('/shop/conversations/:conversationId/messages', requireAuth, ChatController.listShopMessages);
 router.post('/shop/conversations/:conversationId/messages', requireAuth, ChatController.sendShopMessage);

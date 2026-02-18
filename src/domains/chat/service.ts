@@ -1,10 +1,11 @@
-﻿import {
+import {
   ChatMessageSenderType,
   ChatMessageType,
   ChatParticipantType,
   ChatConversationStatus,
 } from '@prisma/client';
 import prisma from './repo';
+import { emitToClient, emitToShop } from './realtime';
 
 const MAX_MESSAGE_LENGTH = 2000;
 const DEFAULT_PAGE_SIZE = 40;
@@ -578,6 +579,16 @@ export const sendClientMessage = async (
 
     return created;
   });
+  const realtimePayload = {
+    conversationId,
+    messageId: message.id,
+    senderType: ChatMessageSenderType.CLIENT,
+    createdAt: message.createdAt,
+  };
+  emitToShop(conversation.shopId, 'chat:new_message', realtimePayload);
+  emitToClient(clientAuthUserId, 'chat:new_message', realtimePayload);
+  emitToShop(conversation.shopId, 'chat:unread_update', { conversationId, at: message.createdAt });
+  emitToClient(clientAuthUserId, 'chat:unread_update', { conversationId, at: message.createdAt });
 
   return buildMessageResponse(message, clientAuthUserId);
 };
@@ -664,6 +675,20 @@ export const sendShopMessage = async (
 
     return created;
   });
+  const realtimePayload = {
+    conversationId,
+    messageId: message.id,
+    senderType: ChatMessageSenderType.SHOP,
+    createdAt: message.createdAt,
+  };
+  emitToClient(conversation.clientAuthUserId, 'chat:new_message', realtimePayload);
+  emitToShop(conversation.shopId, 'chat:new_message', realtimePayload);
+  emitToClient(conversation.clientAuthUserId, 'chat:unread_update', {
+    conversationId,
+    at: message.createdAt,
+  });
+  emitToShop(conversation.shopId, 'chat:unread_update', { conversationId, at: message.createdAt });
 
   return buildMessageResponse(message, shopAuthUserId);
 };
+

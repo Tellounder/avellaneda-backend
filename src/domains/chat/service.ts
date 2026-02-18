@@ -110,6 +110,28 @@ const buildMessageResponse = (
   isMine: message.senderAuthUserId === authUserId,
 });
 
+const buildRealtimeMessagePayload = (
+  message: {
+    id: string;
+    conversationId: string;
+    senderType: ChatMessageSenderType;
+    senderAuthUserId: string | null;
+    messageType: ChatMessageType;
+    content: string | null;
+    attachments: unknown;
+    createdAt: Date;
+  }
+) => ({
+  id: message.id,
+  conversationId: message.conversationId,
+  senderType: message.senderType,
+  senderAuthUserId: message.senderAuthUserId,
+  messageType: message.messageType,
+  content: message.content,
+  attachments: message.attachments,
+  createdAt: message.createdAt,
+});
+
 const resolveShopByAuthUser = async (authUserId: string, scopedShopId?: string | null) => {
   const where = scopedShopId
     ? { id: scopedShopId, authUserId }
@@ -579,16 +601,37 @@ export const sendClientMessage = async (
 
     return created;
   });
-  const realtimePayload = {
+  const realtimeBasePayload = {
     conversationId,
-    messageId: message.id,
-    senderType: ChatMessageSenderType.CLIENT,
-    createdAt: message.createdAt,
+    message: buildRealtimeMessagePayload(message),
+    conversation: {
+      id: conversationId,
+      updatedAt: now,
+      lastMessagePreview: preview,
+      firstResponseSeconds: conversation.firstResponseSeconds || null,
+    },
   };
-  emitToShop(conversation.shopId, 'chat:new_message', realtimePayload);
-  emitToClient(clientAuthUserId, 'chat:new_message', realtimePayload);
-  emitToShop(conversation.shopId, 'chat:unread_update', { conversationId, at: message.createdAt });
-  emitToClient(clientAuthUserId, 'chat:unread_update', { conversationId, at: message.createdAt });
+
+  emitToShop(conversation.shopId, 'chat:new_message', {
+    ...realtimeBasePayload,
+    recipient: ChatParticipantType.SHOP,
+    unreadDelta: 1,
+  });
+  emitToClient(clientAuthUserId, 'chat:new_message', {
+    ...realtimeBasePayload,
+    recipient: ChatParticipantType.CLIENT,
+    unreadDelta: 0,
+  });
+  emitToShop(conversation.shopId, 'chat:unread_update', {
+    conversationId,
+    at: message.createdAt,
+    unreadDelta: 1,
+  });
+  emitToClient(clientAuthUserId, 'chat:unread_update', {
+    conversationId,
+    at: message.createdAt,
+    unreadDelta: 0,
+  });
 
   return buildMessageResponse(message, clientAuthUserId);
 };
@@ -623,6 +666,10 @@ export const sendShopMessage = async (
 
   const firstClientAt = conversation.firstClientMessageAt || conversation.lastClientMessageAt;
   const shouldMarkFirstResponse = !conversation.firstShopResponseAt && Boolean(firstClientAt);
+  const nextFirstResponseSeconds =
+    shouldMarkFirstResponse && firstClientAt
+      ? Math.max(0, Math.round((now.getTime() - firstClientAt.getTime()) / 1000))
+      : conversation.firstResponseSeconds || null;
 
   const message = await prisma.$transaction(async (tx) => {
     const created = await tx.chatMessage.create({
@@ -645,10 +692,7 @@ export const sendShopMessage = async (
         ...(shouldMarkFirstResponse
           ? {
               firstShopResponseAt: now,
-              firstResponseSeconds: Math.max(
-                0,
-                Math.round((now.getTime() - (firstClientAt as Date).getTime()) / 1000)
-              ),
+              firstResponseSeconds: nextFirstResponseSeconds,
             }
           : {}),
       },
@@ -675,19 +719,37 @@ export const sendShopMessage = async (
 
     return created;
   });
-  const realtimePayload = {
+  const realtimeBasePayload = {
     conversationId,
-    messageId: message.id,
-    senderType: ChatMessageSenderType.SHOP,
-    createdAt: message.createdAt,
+    message: buildRealtimeMessagePayload(message),
+    conversation: {
+      id: conversationId,
+      updatedAt: now,
+      lastMessagePreview: preview,
+      firstResponseSeconds: nextFirstResponseSeconds,
+    },
   };
-  emitToClient(conversation.clientAuthUserId, 'chat:new_message', realtimePayload);
-  emitToShop(conversation.shopId, 'chat:new_message', realtimePayload);
+
+  emitToClient(conversation.clientAuthUserId, 'chat:new_message', {
+    ...realtimeBasePayload,
+    recipient: ChatParticipantType.CLIENT,
+    unreadDelta: 1,
+  });
+  emitToShop(conversation.shopId, 'chat:new_message', {
+    ...realtimeBasePayload,
+    recipient: ChatParticipantType.SHOP,
+    unreadDelta: 0,
+  });
   emitToClient(conversation.clientAuthUserId, 'chat:unread_update', {
     conversationId,
     at: message.createdAt,
+    unreadDelta: 1,
   });
-  emitToShop(conversation.shopId, 'chat:unread_update', { conversationId, at: message.createdAt });
+  emitToShop(conversation.shopId, 'chat:unread_update', {
+    conversationId,
+    at: message.createdAt,
+    unreadDelta: 0,
+  });
 
   return buildMessageResponse(message, shopAuthUserId);
 };

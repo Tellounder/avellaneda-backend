@@ -8,6 +8,16 @@ type ChatRealtimeConnection = {
   res: Response;
 };
 
+type ChatRealtimeEnvelope = {
+  channel: string;
+  event: ChatRealtimeEventName | string;
+  payload: unknown;
+};
+
+type ChatRealtimeBroker = {
+  publish: (envelope: ChatRealtimeEnvelope) => void;
+};
+
 const connectionsByChannel = new Map<string, Map<string, ChatRealtimeConnection>>();
 
 const randomId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -23,6 +33,51 @@ const getChannelMap = (channel: string) => {
   }
   return map;
 };
+
+const publishToLocalConnections = (
+  channel: string,
+  event: ChatRealtimeEventName | string,
+  payload: unknown
+) => {
+  const map = connectionsByChannel.get(channel);
+  if (!map || map.size === 0) return;
+
+  const stale: string[] = [];
+  for (const [id, connection] of map.entries()) {
+    try {
+      writeRealtimeEvent(connection.res, event, payload);
+    } catch {
+      stale.push(id);
+    }
+  }
+
+  if (stale.length) {
+    for (const id of stale) {
+      map.delete(id);
+    }
+    if (map.size === 0) {
+      connectionsByChannel.delete(channel);
+    }
+  }
+};
+
+const createInMemoryBroker = (): ChatRealtimeBroker => ({
+  publish: (envelope) => {
+    publishToLocalConnections(envelope.channel, envelope.event, envelope.payload);
+  },
+});
+
+const createRealtimeBroker = (): ChatRealtimeBroker => {
+  const mode = String(process.env.CHAT_REALTIME_BUS || 'memory').trim().toLowerCase();
+  if (mode !== 'memory') {
+    console.warn(
+      `[chat-realtime] modo "${mode}" no soportado en este build. Se utiliza broker in-memory.`
+    );
+  }
+  return createInMemoryBroker();
+};
+
+const realtimeBroker = createRealtimeBroker();
 
 export const writeRealtimeEvent = (
   res: Response,
@@ -50,26 +105,7 @@ export const registerRealtimeConnection = (channel: string, res: Response) => {
 };
 
 const emitToChannel = (channel: string, event: ChatRealtimeEventName | string, payload: unknown) => {
-  const map = connectionsByChannel.get(channel);
-  if (!map || map.size === 0) return;
-
-  const stale: string[] = [];
-  for (const [id, connection] of map.entries()) {
-    try {
-      writeRealtimeEvent(connection.res, event, payload);
-    } catch {
-      stale.push(id);
-    }
-  }
-
-  if (stale.length) {
-    for (const id of stale) {
-      map.delete(id);
-    }
-    if (map.size === 0) {
-      connectionsByChannel.delete(channel);
-    }
-  }
+  realtimeBroker.publish({ channel, event, payload });
 };
 
 export const emitToClient = (
@@ -108,4 +144,3 @@ export const resolveShopScope = async (authUserId: string, requestedShopId?: str
 
   return shop;
 };
-

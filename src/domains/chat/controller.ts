@@ -25,6 +25,13 @@ const ensureShop = (req: Request, res: Response) => {
   return req.auth;
 };
 
+const getShopScope = (req: Request) => {
+  const fromQuery = typeof req.query?.shopId === 'string' ? req.query.shopId.trim() : '';
+  if (fromQuery) return fromQuery;
+  const fromBody = typeof req.body?.shopId === 'string' ? req.body.shopId.trim() : '';
+  return fromBody || undefined;
+};
+
 export const openClientConversation = async (req: Request, res: Response) => {
   const auth = ensureClient(req, res);
   if (!auth) return;
@@ -93,7 +100,7 @@ export const listShopConversations = async (req: Request, res: Response) => {
   if (!auth) return;
 
   try {
-    const data = await ChatService.listShopConversations(auth.authUserId);
+    const data = await ChatService.listShopConversations(auth.authUserId, getShopScope(req));
     res.json(data);
   } catch (error: any) {
     res.status(400).json({ message: error?.message || 'Error al listar conversaciones.', error });
@@ -108,7 +115,7 @@ export const listShopMessages = async (req: Request, res: Response) => {
     const data = await ChatService.listShopMessages(auth.authUserId, req.params.conversationId, {
       limit: req.query.limit,
       before: req.query.before,
-    });
+    }, getShopScope(req));
     res.json({ items: data });
   } catch (error: any) {
     res.status(400).json({ message: error?.message || 'Error al cargar mensajes.', error });
@@ -120,7 +127,12 @@ export const sendShopMessage = async (req: Request, res: Response) => {
   if (!auth) return;
 
   try {
-    const data = await ChatService.sendShopMessage(auth.authUserId, req.params.conversationId, req.body || {});
+    const data = await ChatService.sendShopMessage(
+      auth.authUserId,
+      req.params.conversationId,
+      req.body || {},
+      getShopScope(req)
+    );
     res.json(data);
   } catch (error: any) {
     res.status(400).json({ message: error?.message || 'Error al enviar mensaje.', error });
@@ -132,7 +144,11 @@ export const markShopConversationRead = async (req: Request, res: Response) => {
   if (!auth) return;
 
   try {
-    const data = await ChatService.markShopConversationRead(auth.authUserId, req.params.conversationId);
+    const data = await ChatService.markShopConversationRead(
+      auth.authUserId,
+      req.params.conversationId,
+      getShopScope(req)
+    );
     res.json(data);
   } catch (error: any) {
     res.status(400).json({ message: error?.message || 'Error al marcar lectura.', error });

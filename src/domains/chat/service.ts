@@ -109,12 +109,19 @@ const buildMessageResponse = (
   isMine: message.senderAuthUserId === authUserId,
 });
 
-const resolveShopByAuthUser = async (authUserId: string) => {
+const resolveShopByAuthUser = async (authUserId: string, scopedShopId?: string | null) => {
+  const where = scopedShopId
+    ? { id: scopedShopId, authUserId }
+    : { authUserId };
+
   const shop = await prisma.shop.findFirst({
-    where: { authUserId },
+    where,
     select: { id: true, name: true, logoUrl: true, authUserId: true },
   });
   if (!shop) {
+    if (scopedShopId) {
+      throw new Error('No encontramos la tienda seleccionada para esta cuenta.');
+    }
     throw new Error('No encontramos una tienda asociada a esta cuenta.');
   }
   return shop;
@@ -130,8 +137,12 @@ const getConversationForClient = async (conversationId: string, clientAuthUserId
   return conversation;
 };
 
-const getConversationForShop = async (conversationId: string, shopAuthUserId: string) => {
-  const shop = await resolveShopByAuthUser(shopAuthUserId);
+const getConversationForShop = async (
+  conversationId: string,
+  shopAuthUserId: string,
+  scopedShopId?: string | null
+) => {
+  const shop = await resolveShopByAuthUser(shopAuthUserId, scopedShopId);
   const conversation = await prisma.chatConversation.findUnique({
     where: { id: conversationId },
   });
@@ -318,8 +329,8 @@ export const listClientConversations = async (clientAuthUserId: string) => {
   return withUnread;
 };
 
-export const listShopConversations = async (shopAuthUserId: string) => {
-  const shop = await resolveShopByAuthUser(shopAuthUserId);
+export const listShopConversations = async (shopAuthUserId: string, scopedShopId?: string | null) => {
+  const shop = await resolveShopByAuthUser(shopAuthUserId, scopedShopId);
   const conversations = await prisma.chatConversation.findMany({
     where: { shopId: shop.id },
     orderBy: { updatedAt: 'desc' },
@@ -416,9 +427,10 @@ export const listClientMessages = async (
 export const listShopMessages = async (
   shopAuthUserId: string,
   conversationId: string,
-  options: { limit?: unknown; before?: unknown }
+  options: { limit?: unknown; before?: unknown },
+  scopedShopId?: string | null
 ) => {
-  const { conversation } = await getConversationForShop(conversationId, shopAuthUserId);
+  const { conversation } = await getConversationForShop(conversationId, shopAuthUserId, scopedShopId);
 
   const limit = toPageSize(options.limit);
   const before = toBeforeDate(options.before);
@@ -466,8 +478,12 @@ export const markClientConversationRead = async (clientAuthUserId: string, conve
   return { ok: true, readAt: now };
 };
 
-export const markShopConversationRead = async (shopAuthUserId: string, conversationId: string) => {
-  await getConversationForShop(conversationId, shopAuthUserId);
+export const markShopConversationRead = async (
+  shopAuthUserId: string,
+  conversationId: string,
+  scopedShopId?: string | null
+) => {
+  await getConversationForShop(conversationId, shopAuthUserId, scopedShopId);
 
   const now = new Date();
   await prisma.chatConversationRead.upsert({
@@ -569,9 +585,10 @@ export const sendClientMessage = async (
 export const sendShopMessage = async (
   shopAuthUserId: string,
   conversationId: string,
-  payload: SendMessagePayload
+  payload: SendMessagePayload,
+  scopedShopId?: string | null
 ) => {
-  const { conversation } = await getConversationForShop(conversationId, shopAuthUserId);
+  const { conversation } = await getConversationForShop(conversationId, shopAuthUserId, scopedShopId);
   if (conversation.status !== ChatConversationStatus.OPEN) {
     throw new Error('La conversacion no esta disponible para nuevos mensajes.');
   }

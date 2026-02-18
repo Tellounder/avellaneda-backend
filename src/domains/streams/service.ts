@@ -20,6 +20,7 @@ import { createNotification, notifyAdmins } from '../notifications/service';
 
 const STREAM_VIEW_DEDUP_MS = Math.max(5_000, Number(process.env.STREAM_VIEW_DEDUP_MS || 60_000));
 const recentViewByViewer = new Map<string, number>();
+const DEFAULT_STREAM_TIME_ZONE = 'America/Argentina/Buenos_Aires';
 
 const shouldCountStreamView = (streamId: string, viewerKey?: string) => {
   if (!viewerKey) return true;
@@ -52,7 +53,21 @@ const normalizePlatform = (value: unknown): SocialPlatform => {
 const parseScheduledAt = (data: any) => {
   const raw = data.scheduledAt || data.fullDateISO || data.startTime || data.startDate;
   if (!raw) return new Date();
-  const parsed = new Date(raw);
+  if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? new Date() : raw;
+  if (typeof raw === 'number') {
+    const parsedNumber = new Date(raw);
+    return Number.isNaN(parsedNumber.getTime()) ? new Date() : parsedNumber;
+  }
+  const rawText = String(raw).trim();
+  if (!rawText) return new Date();
+
+  const hasExplicitZone = /(?:[zZ]|[+\-]\d{2}:?\d{2})$/.test(rawText);
+  if (!hasExplicitZone) {
+    const zoned = parseDateTimeInTimeZone(rawText, DEFAULT_STREAM_TIME_ZONE);
+    if (zoned) return zoned;
+  }
+
+  const parsed = new Date(rawText);
   return isNaN(parsed.getTime()) ? new Date() : parsed;
 };
 
@@ -84,7 +99,36 @@ const getZonedDate = (year: number, month: number, day: number, timeZone: string
   return new Date(utc.getTime() - offsetMinutes * 60 * 1000);
 };
 
-const getDayRange = (date: Date, timeZone = 'America/Argentina/Buenos_Aires') => {
+const parseDateTimeInTimeZone = (raw: string, timeZone: string) => {
+  const trimmed = raw.trim();
+  const match = trimmed.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2}))?)?$/
+  );
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4] || 0);
+  const minute = Number(match[5] || 0);
+  const second = Number(match[6] || 0);
+
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minute) ||
+    !Number.isFinite(second)
+  ) {
+    return null;
+  }
+
+  const parsed = getZonedDate(year, month, day, timeZone, hour, minute, second);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const getDayRange = (date: Date, timeZone = DEFAULT_STREAM_TIME_ZONE) => {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
     year: 'numeric',

@@ -21,7 +21,7 @@ const runOnce = async () => {
 
 const start = async () => {
   console.log(`[maintenance-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms`);
-  startSchedulers();
+  startSchedulers({ forceEnableStreams: true });
   await runOnce();
   setInterval(() => {
     runOnce().catch((error) => console.error('[maintenance-worker] Error en ciclo:', error));

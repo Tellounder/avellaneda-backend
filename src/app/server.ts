@@ -3,7 +3,12 @@ import app from './app';
 import { startSchedulers } from './scheduler';
 
 const PORT = process.env.PORT || 3000;
-const parseBool = (value?: string) => value === 'true' || value === '1';
+const parseBool = (value?: string) => {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on';
+};
 
 const logFatal = (label: string) => (error: any) => {
   console.error(`[${label}]`, error);

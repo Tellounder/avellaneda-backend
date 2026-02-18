@@ -4,6 +4,34 @@ import { getOrSetCache } from '../../utils/publicCache';
 
 const STREAMS_CACHE_MS = 15_000;
 const STREAMS_PUBLIC_TIME_ZONE = 'America/Argentina/Buenos_Aires';
+const STREAMS_LIFECYCLE_ON_READ_MS = Math.max(
+  15_000,
+  Number(process.env.STREAMS_LIFECYCLE_ON_READ_MS || 60_000)
+);
+
+let lifecycleTickRunning = false;
+let lifecycleTickLastRunAt = 0;
+
+const runLifecycleTickIfNeeded = async () => {
+  const now = Date.now();
+  if (lifecycleTickRunning) return;
+  if (now - lifecycleTickLastRunAt < STREAMS_LIFECYCLE_ON_READ_MS) return;
+
+  lifecycleTickRunning = true;
+  try {
+    const result = await StreamsService.runStreamLifecycle();
+    lifecycleTickLastRunAt = Date.now();
+    if (result.started > 0 || result.finished > 0) {
+      console.log(
+        `[streams-controller] lifecycle tick applied: started=${result.started} finished=${result.finished}`
+      );
+    }
+  } catch (error) {
+    console.error('[streams-controller] lifecycle tick error', error);
+  } finally {
+    lifecycleTickRunning = false;
+  }
+};
 
 const sanitizeAddressDetails = (details: any) => {
   if (!details || typeof details !== 'object') return null;
@@ -219,6 +247,7 @@ export const getStreamCalendar = async (req: Request, res: Response) => {
 };
 
 export const getStreams = async (req: Request, res: Response) => {
+  await runLifecycleTickIfNeeded();
   const data = await getOrSetCache('streams:all', STREAMS_CACHE_MS, () => StreamsService.getStreams());
   const sanitized = sanitizeStreamPayload(data, req);
   res.json(applyPublicStreamsPolicy(sanitized, req));
@@ -226,6 +255,7 @@ export const getStreams = async (req: Request, res: Response) => {
 
 export const getStreamById = async (req: Request, res: Response) => {
   try {
+    await runLifecycleTickIfNeeded();
     const data = await StreamsService.getStreamById(req.params.id);
     res.json(sanitizeStreamPayload(data, req));
   } catch (error) {

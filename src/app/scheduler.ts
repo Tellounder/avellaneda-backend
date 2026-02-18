@@ -38,7 +38,7 @@ export const startSchedulers = (options: SchedulerOptions = {}) => {
   const notificationWindow = Number(process.env.NOTIFICATION_WINDOW_MINUTES || 15);
   const notificationInterval = Number(process.env.NOTIFICATION_CRON_MINUTES || 5);
   const sanctionsInterval = Number(process.env.SANCTIONS_CRON_MINUTES || 30);
-  const streamsInterval = Number(process.env.STREAMS_CRON_MINUTES || 5);
+  const streamsInterval = Number(process.env.STREAMS_CRON_MINUTES || 1);
 
   if (enableNotifications) {
     const runNotificationsJob = buildLockedJob('notifications', () =>

@@ -2,7 +2,9 @@
 import fs from 'fs/promises';
 import path from 'path';
 import {
+  confirmChatUploadPaths,
   confirmReelUploadPaths,
+  createSignedChatUploadUrls,
   createSignedUploadUrls,
   downloadQaReportHtml,
   uploadQaReportHtml,
@@ -10,6 +12,7 @@ import {
 } from './service';
 import { processReelUpload, enqueueReelVideoJob } from '../../services/reelsMedia.service';
 import { updateShop } from '../shops/service';
+import prisma from '../chat/repo';
 
 const isImage = (type: string) => type.startsWith('image/');
 const isVideo = (type: string) => type.startsWith('video/');
@@ -33,6 +36,146 @@ const resolveContentType = (file: any) => {
   const raw = String(file?.contentType || '').trim();
   if (raw) return raw;
   return guessContentType(String(file?.fileName || ''));
+};
+
+const resolveChatUploadScope = async (req: Request, conversationId: string) => {
+  if (!req.auth) {
+    throw new Error('Autenticacion requerida.');
+  }
+  if (!conversationId) {
+    throw new Error('conversationId requerido.');
+  }
+
+  if (req.auth.userType === 'CLIENT') {
+    const conversation = await prisma.chatConversation.findUnique({
+      where: { id: conversationId },
+      select: { clientAuthUserId: true },
+    });
+    if (!conversation || conversation.clientAuthUserId !== req.auth.authUserId) {
+      throw new Error('Conversacion no encontrada.');
+    }
+    return {
+      senderType: 'CLIENT' as const,
+      senderId: req.auth.authUserId,
+    };
+  }
+
+  if (req.auth.userType === 'SHOP') {
+    if (!req.auth.shopId) {
+      throw new Error('Tienda no vinculada.');
+    }
+    const conversation = await prisma.chatConversation.findUnique({
+      where: { id: conversationId },
+      select: { shopId: true },
+    });
+    if (!conversation || conversation.shopId !== req.auth.shopId) {
+      throw new Error('Conversacion no encontrada.');
+    }
+    return {
+      senderType: 'SHOP' as const,
+      senderId: req.auth.shopId,
+    };
+  }
+
+  throw new Error('Permisos insuficientes.');
+};
+
+export const createChatUploadUrls = async (req: Request, res: Response) => {
+  if (!req.auth) {
+    return res.status(401).json({ message: 'Autenticacion requerida.' });
+  }
+  if (req.auth.userType !== 'CLIENT' && req.auth.userType !== 'SHOP') {
+    return res.status(403).json({ message: 'Permisos insuficientes.' });
+  }
+
+  const { conversationId, files } = req.body || {};
+  const normalizedConversationId = String(conversationId || '').trim();
+  const normalizedFiles = Array.isArray(files)
+    ? files.map((file: any) => ({
+        fileName: String(file?.fileName || 'chat-image.jpg'),
+        contentType: resolveContentType(file),
+      }))
+    : [];
+
+  if (!normalizedConversationId) {
+    return res.status(400).json({ message: 'conversationId requerido.' });
+  }
+  if (!normalizedFiles.length) {
+    return res.status(400).json({ message: 'Debes subir al menos una imagen.' });
+  }
+  if (normalizedFiles.length > 4) {
+    return res.status(400).json({ message: 'Maximo 4 adjuntos por mensaje.' });
+  }
+  const invalid = normalizedFiles.find((file: any) => !isImage(file?.contentType || ''));
+  if (invalid) {
+    return res.status(400).json({ message: 'Los adjuntos de chat deben ser imagenes.' });
+  }
+
+  try {
+    const scope = await resolveChatUploadScope(req, normalizedConversationId);
+    const data = await createSignedChatUploadUrls({
+      conversationId: normalizedConversationId,
+      senderType: scope.senderType,
+      senderId: scope.senderId,
+      items: normalizedFiles,
+    });
+    return res.json(data);
+  } catch (error: any) {
+    const message = error?.message || 'No se pudo generar URLs de subida para chat.';
+    const status =
+      message.includes('Permisos insuficientes')
+        ? 403
+        : message.includes('Autenticacion')
+          ? 401
+          : message.includes('Conversacion no encontrada')
+            ? 404
+            : 400;
+    return res.status(status).json({ message });
+  }
+};
+
+export const confirmChatUpload = async (req: Request, res: Response) => {
+  if (!req.auth) {
+    return res.status(401).json({ message: 'Autenticacion requerida.' });
+  }
+  if (req.auth.userType !== 'CLIENT' && req.auth.userType !== 'SHOP') {
+    return res.status(403).json({ message: 'Permisos insuficientes.' });
+  }
+
+  const { conversationId, paths } = req.body || {};
+  const normalizedConversationId = String(conversationId || '').trim();
+  const normalizedPaths = Array.isArray(paths)
+    ? paths.map((item: any) => String(item || '').trim()).filter(Boolean)
+    : [];
+
+  if (!normalizedConversationId) {
+    return res.status(400).json({ message: 'conversationId requerido.' });
+  }
+  if (!normalizedPaths.length) {
+    return res.status(400).json({ message: 'Debes confirmar al menos un archivo.' });
+  }
+
+  try {
+    const scope = await resolveChatUploadScope(req, normalizedConversationId);
+    const data = await confirmChatUploadPaths({
+      conversationId: normalizedConversationId,
+      senderType: scope.senderType,
+      senderId: scope.senderId,
+      paths: normalizedPaths,
+    });
+    return res.json(data);
+  } catch (error: any) {
+    const message = error?.message || 'No se pudieron confirmar los archivos de chat.';
+    const status =
+      message.includes('Permisos insuficientes')
+        ? 403
+        : message.includes('Autenticacion')
+          ? 401
+          : message.includes('Conversacion no encontrada')
+            ? 404
+            : 400;
+    return res.status(status).json({ message });
+  }
 };
 
 export const createReelUploadUrls = async (req: Request, res: Response) => {

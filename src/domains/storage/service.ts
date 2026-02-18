@@ -4,6 +4,7 @@ import fs from 'fs/promises';
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const reelsBucket = process.env.SUPABASE_REELS_BUCKET || 'reels';
+const chatBucket = process.env.SUPABASE_CHAT_BUCKET || reelsBucket;
 const reportsBucket = process.env.SUPABASE_REPORTS_BUCKET || reelsBucket;
 
 const assertSupabaseConfigured = () => {
@@ -90,7 +91,7 @@ const ensureShopPath = (shopId: string, storagePath: string) => {
   return normalized;
 };
 
-const ensureStorageObjectExists = async (storagePath: string) => {
+const ensureStorageObjectExists = async (bucketName: string, storagePath: string) => {
   const normalized = normalizeStoragePath(storagePath);
   const slashIndex = normalized.lastIndexOf('/');
   const folder = slashIndex >= 0 ? normalized.slice(0, slashIndex) : '';
@@ -99,7 +100,7 @@ const ensureStorageObjectExists = async (storagePath: string) => {
     throw new Error('Ruta de archivo invalida.');
   }
 
-  const { data, error } = await supabase.storage.from(reelsBucket).list(folder, {
+  const { data, error } = await supabase.storage.from(bucketName).list(folder, {
     limit: 100,
     search: fileName,
   });
@@ -157,12 +158,119 @@ export const confirmReelUploadPaths = async ({
   const uploads: Array<{ path: string; publicUrl: string }> = [];
   for (const rawPath of cleanedPaths) {
     const safePath = ensureShopPath(shopId, rawPath);
-    await ensureStorageObjectExists(safePath);
+    await ensureStorageObjectExists(reelsBucket, safePath);
     const { data } = supabase.storage.from(reelsBucket).getPublicUrl(safePath);
     uploads.push({ path: safePath, publicUrl: data.publicUrl });
   }
 
   return { bucket: reelsBucket, uploads };
+};
+
+const ensureChatPath = (prefix: string, storagePath: string) => {
+  const normalized = normalizeStoragePath(storagePath);
+  if (!normalized.startsWith(`${prefix}/`)) {
+    throw new Error('Ruta de archivo invalida para este chat.');
+  }
+  return normalized;
+};
+
+export const createSignedChatUploadUrls = async ({
+  conversationId,
+  senderType,
+  senderId,
+  items,
+}: {
+  conversationId: string;
+  senderType: 'CLIENT' | 'SHOP';
+  senderId: string;
+  items: UploadItemInput[];
+}): Promise<{ bucket: string; uploads: SignedUploadResult[] }> => {
+  assertSupabaseConfigured();
+  if (!conversationId) {
+    throw new Error('conversationId requerido.');
+  }
+  if (!senderId) {
+    throw new Error('senderId requerido.');
+  }
+  if (!items.length) {
+    throw new Error('No se recibieron archivos para subir.');
+  }
+
+  const timestamp = Date.now();
+  const safeConversationId = slugify(conversationId) || 'conversation';
+  const safeSenderType = senderType === 'SHOP' ? 'shop' : 'client';
+  const safeSenderId = slugify(senderId) || 'sender';
+  const prefix = `chat/${safeConversationId}/${safeSenderType}/${safeSenderId}`;
+  const uploads: SignedUploadResult[] = [];
+
+  for (const [index, item] of items.entries()) {
+    const safeName = slugify(item.fileName || `chat-${index}`);
+    const path = `${prefix}/${timestamp}-${index}-${safeName}`;
+    const { data, error } = await supabase.storage
+      .from(chatBucket)
+      .createSignedUploadUrl(path);
+
+    if (error || !data) {
+      throw new Error(error?.message || 'No se pudo generar URL de subida.');
+    }
+
+    const { data: publicData } = supabase.storage.from(chatBucket).getPublicUrl(path);
+    uploads.push({
+      path,
+      signedUrl: data.signedUrl,
+      publicUrl: publicData.publicUrl,
+    });
+  }
+
+  return { bucket: chatBucket, uploads };
+};
+
+export const confirmChatUploadPaths = async ({
+  conversationId,
+  senderType,
+  senderId,
+  paths,
+}: {
+  conversationId: string;
+  senderType: 'CLIENT' | 'SHOP';
+  senderId: string;
+  paths: string[];
+}) => {
+  assertSupabaseConfigured();
+  if (!conversationId) {
+    throw new Error('conversationId requerido.');
+  }
+  if (!senderId) {
+    throw new Error('senderId requerido.');
+  }
+  if (!Array.isArray(paths) || paths.length === 0) {
+    throw new Error('No se recibieron archivos para confirmar.');
+  }
+
+  const safeConversationId = slugify(conversationId) || 'conversation';
+  const safeSenderType = senderType === 'SHOP' ? 'shop' : 'client';
+  const safeSenderId = slugify(senderId) || 'sender';
+  const prefix = `chat/${safeConversationId}/${safeSenderType}/${safeSenderId}`;
+
+  const cleanedPaths = Array.from(
+    new Set(paths.map((item) => String(item || '').trim()).filter(Boolean))
+  );
+  if (!cleanedPaths.length) {
+    throw new Error('No se recibieron rutas validas para confirmar.');
+  }
+  if (cleanedPaths.length > 4) {
+    throw new Error('Maximo 4 adjuntos por mensaje.');
+  }
+
+  const uploads: Array<{ path: string; publicUrl: string }> = [];
+  for (const rawPath of cleanedPaths) {
+    const safePath = ensureChatPath(prefix, rawPath);
+    await ensureStorageObjectExists(chatBucket, safePath);
+    const { data } = supabase.storage.from(chatBucket).getPublicUrl(safePath);
+    uploads.push({ path: safePath, publicUrl: data.publicUrl });
+  }
+
+  return { bucket: chatBucket, uploads };
 };
 
 export const uploadShopImage = async ({

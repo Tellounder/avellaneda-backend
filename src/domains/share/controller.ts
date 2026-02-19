@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
-import { ReelStatus, ReelType, StreamStatus } from '@prisma/client';
+import { ReelStatus, ReelType } from '@prisma/client';
 import { getReelShareData, getStreamShareData } from './service';
 
 const BRAND_NAME = 'Avvivo - by Distrito Moda';
 const BRAND_SITE_NAME = 'Avvivo - by Distrito Moda';
-const DEFAULT_SHARE_LOGO_PATH = '/img/avvivo-logo.svg';
+const DEFAULT_SHARE_LOGO_PATH = '/img/avvivo-logo.png';
 
 const escapeHtml = (value: string) =>
   value
@@ -209,8 +209,7 @@ export const getReelSharePage = async (req: Request, res: Response) => {
   const baseForAssets = appBaseUrl || requestBaseUrl;
   const defaultLogoUrl = normalizeOgUrl(DEFAULT_SHARE_LOGO_PATH, baseForAssets);
   const imageUrl =
-    normalizeOgUrl(reel.thumbnailUrl || photoUrl || reel.shop?.logoUrl || null, baseForAssets) ||
-    defaultLogoUrl;
+    normalizeOgUrl(reel.thumbnailUrl || photoUrl || null, baseForAssets) || defaultLogoUrl;
   const videoUrl =
     reel.type === ReelType.VIDEO && reel.videoUrl && !isExpired
       ? normalizeOgUrl(reel.videoUrl, baseForAssets)
@@ -252,10 +251,7 @@ export const getStreamSharePage = async (req: Request, res: Response) => {
   const title = stream.title ? `${stream.title} | ${BRAND_NAME}` : `${shopName} en vivo | ${BRAND_NAME}`;
   const description = buildStreamOgDescription(shopName, stream.title);
   const baseForAssets = appBaseUrl || requestBaseUrl;
-  const isLive = stream.status === StreamStatus.LIVE;
-  const imageCandidate = isLive
-    ? stream.shop?.logoUrl
-    : stream.shop?.coverUrl || stream.shop?.logoUrl;
+  const imageCandidate = stream.shop?.coverUrl;
   const defaultLogoUrl = normalizeOgUrl(DEFAULT_SHARE_LOGO_PATH, baseForAssets);
   const imageUrl = normalizeOgUrl(imageCandidate || null, baseForAssets) || defaultLogoUrl;
 

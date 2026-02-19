@@ -23,6 +23,12 @@ import { computeAgendaSuspended, createQuotaWalletFromLegacy, creditLiveExtra, c
 import { notifyAdmins } from '../notifications/service';
 import { firebaseAuth, firebaseReady } from '../../lib/firebaseAdmin';
 import { resolvePlanTier } from './plan';
+import { resolveAppUrl, sendEmailTemplate } from '../../services/email.service';
+import {
+  buildSelfRegisterConfirmationEmailTemplate,
+  buildShopInviteEmailTemplate,
+  buildShopPasswordResetEmailTemplate,
+} from '../../services/emailTemplates';
 
 type SocialHandleInput = { platform?: string; handle?: string };
 type WhatsappLineInput = { label?: string; number?: string };
@@ -194,21 +200,27 @@ const ensureFirebaseUser = async (email: string) => {
   }
 };
 
-const sendFirebasePasswordReset = async (email: string) => {
-  const apiKey = process.env.FIREBASE_WEB_API_KEY || '';
-  if (!apiKey) {
-    throw new Error('FIREBASE_WEB_API_KEY no configurado.');
-  }
-  const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ requestType: 'PASSWORD_RESET', email }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Firebase sendOobCode error: ${res.status} ${body}`.trim());
-  }
-  return res.json().catch(() => ({}));
+const sendShopAccessEmail = async (params: {
+  email: string;
+  shopName: string;
+  resetUrl: string;
+  mode: 'invite' | 'reset';
+}) => {
+  const appUrl = resolveAppUrl();
+  const template =
+    params.mode === 'invite'
+      ? buildShopInviteEmailTemplate({
+          shopName: params.shopName,
+          resetUrl: params.resetUrl,
+          appUrl,
+        })
+      : buildShopPasswordResetEmailTemplate({
+          shopName: params.shopName,
+          resetUrl: params.resetUrl,
+          appUrl,
+        });
+
+  return sendEmailTemplate(params.email, template, { requireConfigured: true });
 };
 
 export const isShopEmail = async (email: string) => {
@@ -1009,6 +1021,17 @@ export const createSelfRegisteredShop = async (
     refId: createdShop.id,
   });
 
+  try {
+    const confirmationTemplate = buildSelfRegisterConfirmationEmailTemplate({
+      shopName: createdShop.name,
+      addressDisplay: createdShop.addressDisplay || createdShop.address || 'Direccion informada',
+      appUrl: resolveAppUrl(),
+    });
+    await sendEmailTemplate(email, confirmationTemplate);
+  } catch (error) {
+    console.error(`[shops:self-register] No se pudo enviar confirmacion por email a ${email}:`, error);
+  }
+
   return createdShop;
 };
 
@@ -1159,10 +1182,16 @@ export const createShop = async (data: any) => {
     }
   );
 
-  if (normalizedEmail && isValidEmail(normalizedEmail) && !requiresEmailFix && process.env.FIREBASE_WEB_API_KEY) {
+  if (normalizedEmail && isValidEmail(normalizedEmail) && !requiresEmailFix && firebaseAuth) {
     try {
       await ensureFirebaseUser(normalizedEmail);
-      await sendFirebasePasswordReset(normalizedEmail);
+      const resetLink = await firebaseAuth.generatePasswordResetLink(normalizedEmail);
+      await sendShopAccessEmail({
+        email: normalizedEmail,
+        shopName: normalizeText(createdShop.name) || 'Tu tienda',
+        resetUrl: resetLink,
+        mode: 'invite',
+      });
     } catch (error) {
       console.error('Error enviando invitacion de tienda:', error);
     }
@@ -1749,7 +1778,7 @@ export const resetShopPassword = async (id: string) => {
   }
   const shop = await prisma.shop.findUnique({
     where: { id },
-    select: { email: true },
+    select: { id: true, name: true, email: true },
   });
   if (!shop?.email) {
     throw new Error('La tienda no tiene email configurado.');
@@ -1767,7 +1796,21 @@ export const resetShopPassword = async (id: string) => {
   }
 
   const resetLink = await firebaseAuth.generatePasswordResetLink(email);
-  return { resetLink };
+  const shopName = normalizeText(shop.name) || 'Tu tienda';
+  let emailSent = false;
+  try {
+    await sendShopAccessEmail({
+      email,
+      shopName,
+      resetUrl: resetLink,
+      mode: 'reset',
+    });
+    emailSent = true;
+  } catch (error) {
+    console.error(`[shops:reset-password] No se pudo enviar email a ${email}:`, error);
+  }
+
+  return { resetLink, emailSent };
 };
 
 export const sendShopInvite = async (id: string) => {
@@ -1783,7 +1826,16 @@ export const sendShopInvite = async (id: string) => {
     throw new Error('Email invalido para enviar invitacion.');
   }
   await ensureFirebaseUser(email);
-  await sendFirebasePasswordReset(email);
+  if (!firebaseAuth) {
+    throw new Error('Firebase Admin no configurado.');
+  }
+  const resetLink = await firebaseAuth.generatePasswordResetLink(email);
+  await sendShopAccessEmail({
+    email,
+    shopName: normalizeText(shop.name) || 'Tu tienda',
+    resetUrl: resetLink,
+    mode: 'invite',
+  });
   await prisma.shop.update({
     where: { id: shop.id },
     data: { requiresEmailFix: false },

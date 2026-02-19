@@ -30,6 +30,9 @@ FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY----
 ADMIN_EMAILS=admin1@gmail.com,admin2@gmail.com
 CORS_ORIGINS=http://localhost:5173,https://avellaneda-en-vivo.web.app
 APP_URL=https://avellaneda-en-vivo.web.app
+RESEND_API_KEY=re_xxx
+RESEND_FROM="Avellaneda en Vivo <no-reply@avellanedaenvivo.com.ar>"
+RESEND_REPLY_TO=administracion@avellanedaenvivo.com.ar
 NODE_ENV=production
 ```
 Opcionales:
@@ -55,6 +58,7 @@ SANCTIONS_CRON_MINUTES=30
 
 ## Endpoints clave (referencia)
 - `GET /auth/me` - perfil y rol actual
+- `POST /auth/forgot-password` - envio de recuperacion de clave via no-reply (Resend)
 - `GET /shops` / `PUT /shops/:id` - tiendas
 - `POST /streams` / `PUT /streams/:id` - vivos
 - `GET /reels` / `POST /reels` - reels

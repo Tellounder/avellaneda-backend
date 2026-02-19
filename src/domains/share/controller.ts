@@ -42,6 +42,73 @@ const guessImageType = (value?: string | null) => {
   return 'image/jpeg';
 };
 
+const looksLikeSvgByUrl = (value?: string | null) => {
+  if (!value) return false;
+  return /\.svg(?:[?#].*)?$/i.test(value);
+};
+
+const looksLikeRasterByUrl = (value?: string | null) => {
+  if (!value) return false;
+  return /\.(png|jpe?g|webp|gif)(?:[?#].*)?$/i.test(value);
+};
+
+const hasLogoPathHint = (value?: string | null) => {
+  if (!value) return false;
+  return /\/logo(?:[/?#]|$)/i.test(value);
+};
+
+const fetchContentType = async (url: string): Promise<string | null> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  try {
+    const response = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+    const contentType = response.headers.get('content-type');
+    return contentType ? contentType.toLowerCase() : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const resolveShareImageUrl = async (
+  candidates: Array<string | null | undefined>,
+  fallback: string | null
+): Promise<string | null> => {
+  for (const rawCandidate of candidates) {
+    if (!rawCandidate) continue;
+    const candidate = rawCandidate.trim();
+    if (!candidate) continue;
+
+    if (looksLikeSvgByUrl(candidate)) {
+      continue;
+    }
+
+    if (looksLikeRasterByUrl(candidate)) {
+      return candidate;
+    }
+
+    if (hasLogoPathHint(candidate)) {
+      const contentType = await fetchContentType(candidate);
+      if (contentType?.includes('image/svg+xml')) {
+        continue;
+      }
+      if (contentType?.startsWith('image/')) {
+        return candidate;
+      }
+      continue;
+    }
+
+    return candidate;
+  }
+
+  return fallback;
+};
+
 const buildShareHtml = (params: {
   title: string;
   description: string;
@@ -208,8 +275,14 @@ export const getReelSharePage = async (req: Request, res: Response) => {
   const photoUrl = Array.isArray(reel.photoUrls) ? reel.photoUrls[0] : null;
   const baseForAssets = appBaseUrl || requestBaseUrl;
   const defaultLogoUrl = normalizeOgUrl(DEFAULT_SHARE_LOGO_PATH, baseForAssets);
-  const imageUrl =
-    normalizeOgUrl(reel.thumbnailUrl || photoUrl || null, baseForAssets) || defaultLogoUrl;
+  const imageUrl = await resolveShareImageUrl(
+    [
+      normalizeOgUrl(reel.thumbnailUrl || null, baseForAssets),
+      normalizeOgUrl(photoUrl || null, baseForAssets),
+      normalizeOgUrl(reel.shop?.logoUrl || null, baseForAssets),
+    ],
+    defaultLogoUrl
+  );
   const videoUrl =
     reel.type === ReelType.VIDEO && reel.videoUrl && !isExpired
       ? normalizeOgUrl(reel.videoUrl, baseForAssets)
@@ -251,9 +324,14 @@ export const getStreamSharePage = async (req: Request, res: Response) => {
   const title = stream.title ? `${stream.title} | ${BRAND_NAME}` : `${shopName} en vivo | ${BRAND_NAME}`;
   const description = buildStreamOgDescription(shopName, stream.title);
   const baseForAssets = appBaseUrl || requestBaseUrl;
-  const imageCandidate = stream.shop?.coverUrl;
   const defaultLogoUrl = normalizeOgUrl(DEFAULT_SHARE_LOGO_PATH, baseForAssets);
-  const imageUrl = normalizeOgUrl(imageCandidate || null, baseForAssets) || defaultLogoUrl;
+  const imageUrl = await resolveShareImageUrl(
+    [
+      normalizeOgUrl(stream.shop?.coverUrl || null, baseForAssets),
+      normalizeOgUrl(stream.shop?.logoUrl || null, baseForAssets),
+    ],
+    defaultLogoUrl
+  );
 
   const html = buildShareHtml({
     title,

@@ -2,6 +2,10 @@ import { Request, Response } from 'express';
 import { ReelStatus, ReelType, StreamStatus } from '@prisma/client';
 import { getReelShareData, getStreamShareData } from './service';
 
+const BRAND_NAME = 'Avvivo - by Distrito Moda';
+const BRAND_SITE_NAME = 'Avvivo - by Distrito Moda';
+const DEFAULT_SHARE_LOGO_PATH = '/img/avvivo-logo.svg';
+
 const escapeHtml = (value: string) =>
   value
     .replace(/&/g, '&amp;')
@@ -11,13 +15,13 @@ const escapeHtml = (value: string) =>
     .replace(/'/g, '&#39;');
 
 const buildOgDescription = (shopName: string, presetLabel?: string | null) => {
-  const presetLine = presetLabel ? ` ${presetLabel}.` : '';
-  return `${shopName} en Avellaneda en Vivo.${presetLine} Miralo antes de que expire. Nota: este reel estara activo por 24 hs.`;
+  const presetLine = presetLabel ? ` Estilo: ${presetLabel}.` : '';
+  return `${shopName} en ${BRAND_NAME}.${presetLine} Miralo en Avellaneda en Vivo.`;
 };
 
 const buildStreamOgDescription = (shopName: string, title?: string | null) => {
   const titleLine = title ? ` ${title}.` : '';
-  return `Mira el vivo de ${shopName} en Avellaneda en Vivo.${titleLine} Sumate ahora.`;
+  return `Vivo de ${shopName} en ${BRAND_NAME}.${titleLine} Sumate ahora.`;
 };
 
 const normalizeOgUrl = (value?: string | null, baseUrl?: string | null) => {
@@ -31,6 +35,7 @@ const normalizeOgUrl = (value?: string | null, baseUrl?: string | null) => {
 
 const guessImageType = (value?: string | null) => {
   const lower = (value || '').toLowerCase();
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
   if (lower.endsWith('.png')) return 'image/png';
   if (lower.endsWith('.webp')) return 'image/webp';
   if (lower.endsWith('.gif')) return 'image/gif';
@@ -50,16 +55,18 @@ const buildShareHtml = (params: {
   const description = escapeHtml(params.description);
   const shareUrl = escapeHtml(params.shareUrl);
   const appUrl = escapeHtml(params.appUrl);
+  const autoRedirect = !params.isExpired;
+
   const imageMeta = params.imageUrl
     ? [
         `<meta property="og:image" content="${escapeHtml(params.imageUrl)}" />`,
         `<meta property="og:image:secure_url" content="${escapeHtml(params.imageUrl)}" />`,
         `<meta property="og:image:type" content="${guessImageType(params.imageUrl)}" />`,
-        `<meta property="og:image:width" content="1080" />`,
-        `<meta property="og:image:height" content="1920" />`,
         `<meta property="og:image:alt" content="${title}" />`,
+        `<meta name="twitter:image" content="${escapeHtml(params.imageUrl)}" />`,
       ].join('\n')
     : '';
+
   const videoMeta = params.videoUrl
     ? [
         `<meta property="og:video" content="${escapeHtml(params.videoUrl)}" />`,
@@ -69,8 +76,16 @@ const buildShareHtml = (params: {
         `<meta property="og:video:height" content="1280" />`,
       ].join('\n')
     : '';
-  const redirectUrl = params.isExpired ? shareUrl : appUrl;
-  const refreshSeconds = params.isExpired ? 0 : 0;
+
+  const refreshMeta = autoRedirect
+    ? `<meta http-equiv="refresh" content="0;url=${appUrl}" />`
+    : '';
+
+  const ctaTitle = params.isExpired ? 'Contenido no disponible' : 'Abriendo Avvivo';
+  const ctaMessage = params.isExpired
+    ? 'Este contenido ya no esta disponible. Podes seguir viendo tiendas, reels y vivos en Avvivo.'
+    : 'Si no redirige automaticamente, toca el boton para abrir Avvivo.';
+  const ctaButton = params.isExpired ? 'Ir a Avvivo' : 'Abrir Avvivo';
 
   return `<!doctype html>
 <html lang="es">
@@ -78,20 +93,84 @@ const buildShareHtml = (params: {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex,nofollow" />
+    <link rel="canonical" href="${shareUrl}" />
     <meta property="og:type" content="${params.videoUrl ? 'video.other' : 'website'}" />
-    <meta property="og:site_name" content="Avellaneda en Vivo" />
+    <meta property="og:site_name" content="${escapeHtml(BRAND_SITE_NAME)}" />
     <meta property="og:title" content="${title}" />
     <meta property="og:description" content="${description}" />
     <meta property="og:url" content="${shareUrl}" />
     ${imageMeta}
     ${videoMeta}
-    <meta name="twitter:card" content="${params.videoUrl ? 'player' : 'summary_large_image'}" />
-    <meta http-equiv="refresh" content="${refreshSeconds};url=${redirectUrl}" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${title}" />
+    <meta name="twitter:description" content="${description}" />
+    <meta name="twitter:url" content="${shareUrl}" />
+    ${refreshMeta}
     <title>${title}</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at top, #ffebf4 0%, #f4f5f8 55%, #eceef3 100%);
+        font-family: Manrope, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #111827;
+      }
+      .card {
+        width: min(92vw, 520px);
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 20px;
+        box-shadow: 0 18px 50px rgba(17, 24, 39, 0.12);
+        padding: 28px;
+      }
+      h1 {
+        margin: 0 0 8px 0;
+        font-size: 28px;
+        line-height: 1.15;
+      }
+      p {
+        margin: 0;
+        color: #4b5563;
+      }
+      .row {
+        margin-top: 22px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .button {
+        display: inline-block;
+        text-decoration: none;
+        border-radius: 999px;
+        background: #ff006f;
+        color: #ffffff;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        padding: 12px 18px;
+      }
+      .meta {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #6b7280;
+      }
+    </style>
   </head>
   <body>
+    <main class="card">
+      <h1>${escapeHtml(ctaTitle)}</h1>
+      <p>${escapeHtml(ctaMessage)}</p>
+      <div class="row">
+        <a class="button" href="${appUrl}">${escapeHtml(ctaButton)}</a>
+      </div>
+      <p class="meta">${escapeHtml(BRAND_NAME)}</p>
+    </main>
     <script>
-      if (${params.isExpired ? 'false' : 'true'}) {
+      if (${autoRedirect ? 'true' : 'false'}) {
         window.location.replace("${appUrl}");
       }
     </script>
@@ -114,7 +193,8 @@ export const getReelSharePage = async (req: Request, res: Response) => {
     reel.expiresAt.getTime() < now.getTime();
 
   const requestBaseUrl = `${req.protocol}://${req.get('host')}`;
-  const shareUrl = `${requestBaseUrl}/share/reels/${reel.id}`;
+  const shareBaseUrl = process.env.PUBLIC_SHARE_URL || requestBaseUrl;
+  const shareUrl = `${shareBaseUrl}/share/reels/${reel.id}`;
   const appBaseUrl =
     process.env.APP_URL ||
     process.env.FRONTEND_URL ||
@@ -123,14 +203,14 @@ export const getReelSharePage = async (req: Request, res: Response) => {
   const appUrl = `${appBaseUrl}/?reelId=${reel.id}`;
 
   const shopName = reel.shop?.name || 'Tienda';
-  const title = `${shopName} en Avellaneda en Vivo`;
+  const title = `${shopName} | ${BRAND_NAME}`;
   const description = buildOgDescription(shopName, reel.presetLabel);
   const photoUrl = Array.isArray(reel.photoUrls) ? reel.photoUrls[0] : null;
   const baseForAssets = appBaseUrl || requestBaseUrl;
-  const imageUrl = normalizeOgUrl(
-    reel.thumbnailUrl || photoUrl || reel.shop?.logoUrl || null,
-    baseForAssets
-  );
+  const defaultLogoUrl = normalizeOgUrl(DEFAULT_SHARE_LOGO_PATH, baseForAssets);
+  const imageUrl =
+    normalizeOgUrl(reel.thumbnailUrl || photoUrl || reel.shop?.logoUrl || null, baseForAssets) ||
+    defaultLogoUrl;
   const videoUrl =
     reel.type === ReelType.VIDEO && reel.videoUrl && !isExpired
       ? normalizeOgUrl(reel.videoUrl, baseForAssets)
@@ -159,7 +239,8 @@ export const getStreamSharePage = async (req: Request, res: Response) => {
   }
 
   const requestBaseUrl = `${req.protocol}://${req.get('host')}`;
-  const shareUrl = `${requestBaseUrl}/share/streams/${stream.id}`;
+  const shareBaseUrl = process.env.PUBLIC_SHARE_URL || requestBaseUrl;
+  const shareUrl = `${shareBaseUrl}/share/streams/${stream.id}`;
   const appBaseUrl =
     process.env.APP_URL ||
     process.env.FRONTEND_URL ||
@@ -168,14 +249,15 @@ export const getStreamSharePage = async (req: Request, res: Response) => {
   const appUrl = `${appBaseUrl}/en-vivo/${stream.id}`;
 
   const shopName = stream.shop?.name || 'Tienda';
-  const title = stream.title ? `${stream.title} — ${shopName}` : `${shopName} en vivo`;
+  const title = stream.title ? `${stream.title} | ${BRAND_NAME}` : `${shopName} en vivo | ${BRAND_NAME}`;
   const description = buildStreamOgDescription(shopName, stream.title);
   const baseForAssets = appBaseUrl || requestBaseUrl;
   const isLive = stream.status === StreamStatus.LIVE;
   const imageCandidate = isLive
     ? stream.shop?.logoUrl
     : stream.shop?.coverUrl || stream.shop?.logoUrl;
-  const imageUrl = normalizeOgUrl(imageCandidate || null, baseForAssets);
+  const defaultLogoUrl = normalizeOgUrl(DEFAULT_SHARE_LOGO_PATH, baseForAssets);
+  const imageUrl = normalizeOgUrl(imageCandidate || null, baseForAssets) || defaultLogoUrl;
 
   const html = buildShareHtml({
     title,

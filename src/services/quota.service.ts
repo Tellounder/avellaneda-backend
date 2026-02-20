@@ -124,6 +124,91 @@ const updateQuotaWallet = async (
   return client.quotaWallet.update({ where: { shopId }, data });
 };
 
+const resolveSafeNumber = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const computeLiveAvailableFromWallet = (wallet: {
+  weeklyLiveBaseLimit: number;
+  weeklyLiveUsed: number;
+  liveExtraBalance: number;
+}) => {
+  return (
+    Math.max(0, resolveSafeNumber(wallet.weeklyLiveBaseLimit) - resolveSafeNumber(wallet.weeklyLiveUsed)) +
+    Math.max(0, resolveSafeNumber(wallet.liveExtraBalance))
+  );
+};
+
+const computeReelAvailableFromWallet = (wallet: {
+  reelDailyLimit: number;
+  reelDailyUsed: number;
+  reelExtraBalance: number;
+}) => {
+  return (
+    Math.max(0, resolveSafeNumber(wallet.reelDailyLimit) - resolveSafeNumber(wallet.reelDailyUsed)) +
+    Math.max(0, resolveSafeNumber(wallet.reelExtraBalance))
+  );
+};
+
+const normalizeQuotaWallet = async (
+  shopId: string,
+  wallet: {
+    shopId: string;
+    weeklyLiveBaseLimit: number;
+    weeklyLiveUsed: number;
+    weeklyLiveWeekKey: string;
+    liveExtraBalance: number;
+    reelDailyLimit: number;
+    reelDailyUsed: number;
+    reelDailyDateKey: string;
+    reelExtraBalance: number;
+  },
+  client: PrismaClientLike
+) => {
+  const weeklyLiveBaseLimit = Math.max(0, resolveSafeNumber(wallet.weeklyLiveBaseLimit));
+  const weeklyLiveUsed = Math.max(
+    0,
+    Math.min(resolveSafeNumber(wallet.weeklyLiveUsed), weeklyLiveBaseLimit)
+  );
+  const liveExtraBalance = Math.max(0, resolveSafeNumber(wallet.liveExtraBalance));
+  const reelDailyLimit = Math.max(0, resolveSafeNumber(wallet.reelDailyLimit));
+  const reelDailyUsed = Math.max(0, Math.min(resolveSafeNumber(wallet.reelDailyUsed), reelDailyLimit));
+  const reelExtraBalance = Math.max(0, resolveSafeNumber(wallet.reelExtraBalance));
+
+  const hasChanges =
+    weeklyLiveBaseLimit !== wallet.weeklyLiveBaseLimit ||
+    weeklyLiveUsed !== wallet.weeklyLiveUsed ||
+    liveExtraBalance !== wallet.liveExtraBalance ||
+    reelDailyLimit !== wallet.reelDailyLimit ||
+    reelDailyUsed !== wallet.reelDailyUsed ||
+    reelExtraBalance !== wallet.reelExtraBalance;
+
+  if (!hasChanges) return wallet;
+
+  const nextWallet = await client.quotaWallet.update({
+    where: { shopId },
+    data: {
+      weeklyLiveBaseLimit,
+      weeklyLiveUsed,
+      liveExtraBalance,
+      reelDailyLimit,
+      reelDailyUsed,
+      reelExtraBalance,
+    },
+  });
+
+  await client.shop.update({
+    where: { id: shopId },
+    data: {
+      streamQuota: computeLiveAvailableFromWallet(nextWallet),
+      reelQuota: computeReelAvailableFromWallet(nextWallet),
+    },
+  });
+
+  return nextWallet;
+};
+
 export const buildWalletFromLegacy = (
   plan: string | null,
   streamQuota: number | null,
@@ -228,8 +313,8 @@ export const syncQuotaWalletToPlan = async (
     return null;
   }
 
-  const nextWeeklyUsed = Math.min(wallet.weeklyLiveUsed, limits.weeklyLiveBaseLimit);
-  const nextReelUsed = Math.min(wallet.reelDailyUsed, limits.reelDailyLimit);
+  const nextWeeklyUsed = Math.max(0, Math.min(wallet.weeklyLiveUsed, limits.weeklyLiveBaseLimit));
+  const nextReelUsed = Math.max(0, Math.min(wallet.reelDailyUsed, limits.reelDailyLimit));
 
   return client.quotaWallet.update({
     where: { shopId },
@@ -257,6 +342,7 @@ export const getLiveQuotaSnapshot = async (
   }
 
   let wallet = await ensureQuotaWallet(shop, client, scheduledAt, new Date());
+  wallet = await normalizeQuotaWallet(shopId, wallet, client);
   const weekKey = getWeekKey(scheduledAt);
   const limits = resolvePlanLimits(shop.plan);
 
@@ -280,7 +366,7 @@ export const getLiveQuotaSnapshot = async (
     },
   });
 
-  const nextWeeklyUsed = Math.min(weekCount, baseLimit);
+  const nextWeeklyUsed = Math.max(0, Math.min(weekCount, baseLimit));
   if (wallet.weeklyLiveUsed !== nextWeeklyUsed) {
     updateData.weeklyLiveUsed = nextWeeklyUsed;
   }
@@ -312,6 +398,7 @@ export const getReelQuotaSnapshot = async (
   }
 
   let wallet = await ensureQuotaWallet(shop, client, new Date(), date);
+  wallet = await normalizeQuotaWallet(shopId, wallet, client);
   const dayKey = formatDateKey(date);
   const limits = resolvePlanLimits(shop.plan);
 
@@ -333,7 +420,7 @@ export const getReelQuotaSnapshot = async (
     },
   });
 
-  const nextDailyUsed = Math.min(dailyCount, dailyLimit);
+  const nextDailyUsed = Math.max(0, Math.min(dailyCount, dailyLimit));
   if (wallet.reelDailyUsed !== nextDailyUsed) {
     updateData.reelDailyUsed = nextDailyUsed;
   }
@@ -362,18 +449,32 @@ export const reserveLiveQuota = async (
     throw new Error('No tienes cupos disponibles para agendar.');
   }
 
-  const nextWeeklyUsed = Math.min(snapshot.baseLimit, snapshot.weekCount + (useBase ? 1 : 0));
-  const nextExtraBalance = snapshot.wallet.liveExtraBalance - (useBase ? 0 : 1);
-  const baseRemainingNext = Math.max(0, snapshot.baseLimit - (snapshot.weekCount + (useBase ? 1 : 0)));
-  const nextStreamQuota = baseRemainingNext + nextExtraBalance;
+  const nextWeeklyUsed = Math.max(0, Math.min(snapshot.baseLimit, snapshot.weekCount + (useBase ? 1 : 0)));
 
-  await client.quotaWallet.update({
-    where: { shopId },
-    data: {
-      weeklyLiveUsed: nextWeeklyUsed,
-      liveExtraBalance: nextExtraBalance,
-    },
-  });
+  if (useBase) {
+    await client.quotaWallet.update({
+      where: { shopId },
+      data: { weeklyLiveUsed: nextWeeklyUsed },
+    });
+  } else {
+    const debited = await client.quotaWallet.updateMany({
+      where: { shopId, liveExtraBalance: { gt: 0 } },
+      data: {
+        weeklyLiveUsed: nextWeeklyUsed,
+        liveExtraBalance: { decrement: 1 },
+      },
+    });
+    if (debited.count === 0) {
+      throw new Error('No tienes cupos disponibles para agendar.');
+    }
+  }
+
+  const updatedWalletRaw = await client.quotaWallet.findUnique({ where: { shopId } });
+  if (!updatedWalletRaw) {
+    throw new Error('No se pudo actualizar la disponibilidad de cupos.');
+  }
+  const updatedWallet = await normalizeQuotaWallet(shopId, updatedWalletRaw, client);
+  const nextStreamQuota = computeLiveAvailableFromWallet(updatedWallet);
 
   await client.shop.update({
     where: { id: shopId },
@@ -394,18 +495,32 @@ export const reserveReelQuota = async (
     throw new Error('No tienes cupos disponibles para reels.');
   }
 
-  const nextDailyUsed = Math.min(snapshot.dailyLimit, snapshot.dailyCount + (useBase ? 1 : 0));
-  const nextExtraBalance = snapshot.wallet.reelExtraBalance - (useBase ? 0 : 1);
-  const baseRemainingNext = Math.max(0, snapshot.dailyLimit - (snapshot.dailyCount + (useBase ? 1 : 0)));
-  const nextReelQuota = baseRemainingNext + nextExtraBalance;
+  const nextDailyUsed = Math.max(0, Math.min(snapshot.dailyLimit, snapshot.dailyCount + (useBase ? 1 : 0)));
 
-  await client.quotaWallet.update({
-    where: { shopId },
-    data: {
-      reelDailyUsed: nextDailyUsed,
-      reelExtraBalance: nextExtraBalance,
-    },
-  });
+  if (useBase) {
+    await client.quotaWallet.update({
+      where: { shopId },
+      data: { reelDailyUsed: nextDailyUsed },
+    });
+  } else {
+    const debited = await client.quotaWallet.updateMany({
+      where: { shopId, reelExtraBalance: { gt: 0 } },
+      data: {
+        reelDailyUsed: nextDailyUsed,
+        reelExtraBalance: { decrement: 1 },
+      },
+    });
+    if (debited.count === 0) {
+      throw new Error('No tienes cupos disponibles para reels.');
+    }
+  }
+
+  const updatedWalletRaw = await client.quotaWallet.findUnique({ where: { shopId } });
+  if (!updatedWalletRaw) {
+    throw new Error('No se pudo actualizar la disponibilidad de cupos.');
+  }
+  const updatedWallet = await normalizeQuotaWallet(shopId, updatedWalletRaw, client);
+  const nextReelQuota = computeReelAvailableFromWallet(updatedWallet);
 
   await client.shop.update({
     where: { id: shopId },

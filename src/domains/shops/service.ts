@@ -29,6 +29,7 @@ import {
   buildShopInviteEmailTemplate,
   buildShopPasswordResetEmailTemplate,
 } from '../../services/emailTemplates';
+import { createSelfRegisterUploadToken } from '../../utils/selfRegisterUploadToken';
 
 type SocialHandleInput = { platform?: string; handle?: string };
 type WhatsappLineInput = { label?: string; number?: string };
@@ -1032,7 +1033,10 @@ export const createSelfRegisteredShop = async (
     console.error(`[shops:self-register] No se pudo enviar confirmacion por email a ${email}:`, error);
   }
 
-  return createdShop;
+  return {
+    shop: createdShop,
+    logoUploadToken: createSelfRegisterUploadToken(createdShop.id),
+  };
 };
 
 export const createShop = async (data: any) => {

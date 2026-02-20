@@ -1,6 +1,7 @@
-﻿import { Request, Response } from 'express';
+import { Request, Response } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
+import { ShopRegistrationSource, ShopVerificationState } from '@prisma/client';
 import {
   confirmChatUploadPaths,
   confirmReelUploadPaths,
@@ -13,9 +14,17 @@ import {
 import { processReelUpload, enqueueReelVideoJob } from '../../services/reelsMedia.service';
 import { updateShop } from '../shops/service';
 import prisma from '../chat/repo';
+import { verifySelfRegisterUploadToken } from '../../utils/selfRegisterUploadToken';
 
 const isImage = (type: string) => type.startsWith('image/');
 const isVideo = (type: string) => type.startsWith('video/');
+
+const getSelfRegisterUploadToken = (req: Request) => {
+  const fromHeader = req.headers['x-self-register-upload-token'];
+  if (typeof fromHeader === 'string' && fromHeader.trim()) return fromHeader.trim();
+  if (Array.isArray(fromHeader) && fromHeader[0]) return String(fromHeader[0]).trim();
+  return String(req.body?.publicUploadToken || '').trim();
+};
 
 const guessContentType = (fileName: string) => {
   const ext = path.extname(fileName || '').toLowerCase();
@@ -338,17 +347,51 @@ export const uploadReelMedia = async (req: Request, res: Response) => {
 };
 
 export const uploadShopImage = async (req: Request, res: Response) => {
-  if (!req.auth) {
-    return res.status(401).json({ message: 'Autenticacion requerida.' });
-  }
   const { shopId, type } = req.body || {};
   const normalizedType = type === 'COVER' ? 'COVER' : 'LOGO';
-  if (req.auth.userType !== 'SHOP' && req.auth.userType !== 'ADMIN') {
+  const token = getSelfRegisterUploadToken(req);
+  const isPublicUploadAttempt = !req.auth && Boolean(token);
+
+  if (req.auth && req.auth.userType !== 'SHOP' && req.auth.userType !== 'ADMIN') {
     return res.status(403).json({ message: 'Permisos insuficientes.' });
   }
-  const effectiveShopId = req.auth.userType === 'SHOP' ? req.auth.shopId : shopId;
+
+  const effectiveShopId = req.auth?.userType === 'SHOP' ? req.auth.shopId : shopId;
   if (!effectiveShopId) {
     return res.status(400).json({ message: 'shopId requerido.' });
+  }
+
+  if (!req.auth && !isPublicUploadAttempt) {
+    return res.status(401).json({ message: 'Autenticacion requerida.' });
+  }
+
+  if (!req.auth && isPublicUploadAttempt) {
+    if (normalizedType !== 'LOGO') {
+      return res.status(403).json({ message: 'Solo se permite subir logo en autoregistro.' });
+    }
+
+    const tokenCheck = verifySelfRegisterUploadToken(token, effectiveShopId);
+    if (!tokenCheck.ok) {
+      return res.status(401).json({ message: tokenCheck.reason });
+    }
+
+    const shop = await prisma.shop.findUnique({
+      where: { id: effectiveShopId },
+      select: {
+        id: true,
+        registrationSource: true,
+        verificationState: true,
+      },
+    });
+    if (!shop) {
+      return res.status(404).json({ message: 'Tienda no encontrada.' });
+    }
+    if (shop.registrationSource !== ShopRegistrationSource.SELF_SERVICE) {
+      return res.status(403).json({ message: 'Upload no permitido para esta tienda.' });
+    }
+    if (shop.verificationState !== ShopVerificationState.UNVERIFIED) {
+      return res.status(403).json({ message: 'La tienda ya no admite upload publico de logo.' });
+    }
   }
 
   const file = Array.isArray(req.files) ? req.files[0] : req.file;
@@ -356,7 +399,7 @@ export const uploadShopImage = async (req: Request, res: Response) => {
     return res.status(400).json({ message: 'Archivo requerido.' });
   }
   if (!isImage(file.mimetype || '')) {
-    return res.status(400).json({ message: 'La imagen debe ser formato válido.' });
+    return res.status(400).json({ message: 'La imagen debe ser formato valido.' });
   }
 
   try {
@@ -378,7 +421,6 @@ export const uploadShopImage = async (req: Request, res: Response) => {
     }
   }
 };
-
 export const uploadReportHtml = async (req: Request, res: Response) => {
   const expectedToken = (process.env.QA_REPORT_UPLOAD_TOKEN || '').trim();
   if (expectedToken) {

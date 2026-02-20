@@ -252,7 +252,10 @@ export const selfRegisterShop = async (req: Request, res: Response) => {
       ip: req.ip,
       userAgent,
     });
-    res.status(201).json(sanitizeShopPayload(data, req));
+    res.status(201).json({
+      shop: sanitizeShopPayload(data.shop, req),
+      logoUploadToken: data.logoUploadToken,
+    });
   } catch (error: any) {
     const status = Number(error?.status) || 500;
     res.status(status).json({

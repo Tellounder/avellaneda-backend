@@ -4,6 +4,7 @@
   "main": "src/app/server.ts",
   "scripts": {
     "start": "npx prisma generate && ts-node src/app/server.ts",
+    "start:render": "npx prisma migrate deploy && npm run start",
     "dev": "npx prisma generate && ts-node-dev --respawn --transpile-only src/app/server.ts",
     "backfill:authusers": "ts-node scripts/backfill-authusers.ts",
     "backfill:quotawallets": "ts-node scripts/backfill-quotawallets.ts",

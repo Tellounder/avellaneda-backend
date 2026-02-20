@@ -35,6 +35,8 @@ const envCorsOrigins = (process.env.CORS_ORIGINS || '')
 const defaultCorsOrigins = [
   'http://localhost:5173',
   'https://avellaneda-en-vivo.web.app',
+  'https://stg-avellanedaenvivo.web.app',
+  'https://stg-avellanedaenvivo.firebaseapp.com',
   'https://avellanedaenvivo.com.ar',
   'https://www.avellanedaenvivo.com.ar',
 ];

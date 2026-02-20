@@ -57,6 +57,18 @@ type SelfRegisterInput = {
   };
   intakeMeta?: Record<string, unknown>;
 };
+type AddressSuggestion = {
+  label: string;
+  details: {
+    street: string;
+    number: string;
+    city: string;
+    province: string;
+    zip: string;
+    lat?: string;
+    lng?: string;
+  };
+};
 type ModerationActor = {
   authUserId?: string | null;
   email?: string | null;
@@ -437,6 +449,49 @@ const geocodeAddressBase = async (addressBase: string) => {
   }
 };
 
+const resolveNominatimStreet = (address: Record<string, unknown>) =>
+  toMapString(
+    address.road ||
+      address.pedestrian ||
+      address.footway ||
+      address.path ||
+      address.neighbourhood ||
+      ''
+  );
+
+const resolveNominatimCity = (address: Record<string, unknown>) =>
+  toMapString(
+    address.city ||
+      address.town ||
+      address.village ||
+      address.suburb ||
+      address.county ||
+      address.hamlet ||
+      ''
+  );
+
+const resolveNominatimProvince = (address: Record<string, unknown>) =>
+  toMapString(address.state || address.region || address.state_district || '');
+
+const toAddressSuggestion = (item: any): AddressSuggestion | null => {
+  if (!item || typeof item !== 'object' || !item.address) return null;
+  const address = item.address as Record<string, unknown>;
+  const label = toMapString(item.display_name || '');
+  if (!label) return null;
+  return {
+    label,
+    details: {
+      street: resolveNominatimStreet(address),
+      number: toMapString(address.house_number || ''),
+      city: resolveNominatimCity(address),
+      province: resolveNominatimProvince(address),
+      zip: toMapString(address.postcode || ''),
+      lat: toMapString(item.lat || ''),
+      lng: toMapString(item.lon || ''),
+    },
+  };
+};
+
 const buildSelfRegisterAddress = (rawAddress: SelfRegisterAddressInput | undefined) => {
   const street = normalizeText(rawAddress?.street);
   const number = normalizeText(rawAddress?.number);
@@ -566,6 +621,59 @@ const LETTER_MAX_LIMIT = Number(process.env.SHOPS_LETTER_MAX_LIMIT || 100);
 const clampLimit = (value: number, fallback: number, max: number) => {
   if (!Number.isFinite(value) || value <= 0) return fallback;
   return Math.min(value, max);
+};
+
+const normalizeCountryCode = (value: unknown) =>
+  String(value || 'ar')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z]/g, '')
+    .slice(0, 2) || 'ar';
+
+export const searchAddressSuggestions = async (
+  query: string,
+  options?: { limit?: number; countryCode?: string }
+): Promise<AddressSuggestion[]> => {
+  const normalizedQuery = normalizeText(query);
+  if (normalizedQuery.length < 3) return [];
+
+  const limit = clampLimit(Number(options?.limit), 6, 10);
+  const countryCode = normalizeCountryCode(options?.countryCode || 'ar');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const params = new URLSearchParams({
+      q: normalizedQuery,
+      format: 'jsonv2',
+      addressdetails: '1',
+      limit: String(limit),
+      countrycodes: countryCode,
+    });
+    const response = await fetch(`${NOMINATIM_URL}?${params.toString()}`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'Accept-Language': 'es',
+        'User-Agent': NOMINATIM_USER_AGENT,
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return [];
+    }
+
+    const payload = (await response.json().catch(() => [])) as any[];
+    if (!Array.isArray(payload)) return [];
+    return payload.map(toAddressSuggestion).filter(Boolean) as AddressSuggestion[];
+  } catch (error: any) {
+    if (error?.name !== 'AbortError') {
+      console.error('[shops.address-search] error:', error);
+    }
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 
 const getHourlySeed = (date: Date, timeZone = FEATURED_TIME_ZONE) => {

@@ -230,6 +230,14 @@ export const getShopsByLetter = async (req: Request, res: Response) => {
   res.json(sanitizeShopPayload(data, req));
 };
 
+export const searchAddressSuggestions = async (req: Request, res: Response) => {
+  const query = String(req.query?.q || '').trim();
+  const limit = Number(req.query?.limit);
+  const countryCode = String(req.query?.countryCode || 'ar');
+  const data = await ShopsService.searchAddressSuggestions(query, { limit, countryCode });
+  res.json(data);
+};
+
 // --- NUEVA FUNCIÃ“N AGREGADA: El "Mozo" toma el pedido de crear tienda ---
 export const createShop = async (req: Request, res: Response) => {
   try {

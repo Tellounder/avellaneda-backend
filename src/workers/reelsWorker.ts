@@ -17,6 +17,18 @@ const DOWNLOAD_TIMEOUT_MS = Math.max(
   30_000,
   Number(process.env.REEL_WORKER_DOWNLOAD_TIMEOUT_MS || 180_000)
 );
+const DOWNLOAD_RETRY_COUNT = Math.max(
+  1,
+  Number(process.env.REEL_WORKER_DOWNLOAD_RETRY_COUNT || 4)
+);
+const DOWNLOAD_RETRY_BACKOFF_MS = Math.max(
+  500,
+  Number(process.env.REEL_WORKER_DOWNLOAD_RETRY_BACKOFF_MS || 1_500)
+);
+const DOWNLOAD_RETRY_MAX_BACKOFF_MS = Math.max(
+  DOWNLOAD_RETRY_BACKOFF_MS,
+  Number(process.env.REEL_WORKER_DOWNLOAD_RETRY_MAX_BACKOFF_MS || 8_000)
+);
 const PROCESS_TIMEOUT_MS = Math.max(
   120_000,
   Number(process.env.REEL_WORKER_PROCESS_TIMEOUT_MS || 900_000)
@@ -28,6 +40,17 @@ const LOCK_TTL_ENV_MS = Math.max(
 const LOCK_TTL_MS = Math.max(LOCK_TTL_ENV_MS, PROCESS_TIMEOUT_MS + 60_000);
 const MAX_RETRIES = Math.max(1, Number(process.env.REEL_WORKER_MAX_RETRIES || 5));
 const MAX_REDIRECTS = 3;
+const DOWNLOAD_RETRYABLE_CODES = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ESOCKETTIMEDOUT',
+  'EAI_AGAIN',
+  'ECONNABORTED',
+  'ENOTFOUND',
+  'ECONNREFUSED',
+]);
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 24 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 24 });
 let cycleInProgress = false;
 
 const normalizeEditorState = (value: any) => {
@@ -63,24 +86,60 @@ const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label: str
   });
 };
 
-const downloadToFile = async (url: string, destPath: string, redirects = 0): Promise<void> => {
-  const client = url.startsWith('https') ? https : http;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const getErrorCode = (error: unknown) => {
+  if (error && typeof error === 'object' && 'code' in error) {
+    return String((error as any).code || '').toUpperCase();
+  }
+  return '';
+};
+
+const isRetryableDownloadError = (error: unknown) => {
+  const code = getErrorCode(error);
+  if (code && DOWNLOAD_RETRYABLE_CODES.has(code)) return true;
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error || '').toLowerCase();
+  return (
+    message.includes('socket hang up') ||
+    message.includes('timeout') ||
+    message.includes('timed out')
+  );
+};
+
+const downloadToFileOnce = async (url: string, destPath: string, redirects = 0): Promise<void> => {
+  const parsed = new URL(url);
+  const isHttps = parsed.protocol === 'https:';
+  const client = isHttps ? https : http;
+  const requestOptions: https.RequestOptions = {
+    protocol: parsed.protocol,
+    hostname: parsed.hostname,
+    port: parsed.port || undefined,
+    path: `${parsed.pathname}${parsed.search}`,
+    method: 'GET',
+    headers: {
+      Accept: '*/*',
+      'User-Agent': 'avvivo-reels-worker/1.0',
+      Connection: 'keep-alive',
+    },
+    agent: isHttps ? httpsAgent : httpAgent,
+  };
+
   await new Promise<void>((resolve, reject) => {
-    const req = client.get(url, (res) => {
+    const req = client.get(requestOptions, (res) => {
       const status = res.statusCode || 0;
       if ([301, 302, 307, 308].includes(status) && res.headers.location) {
         res.resume();
         if (redirects >= MAX_REDIRECTS) {
-          reject(new Error('Demasiadas redirecciones al descargar video.'));
+          reject(new Error('Demasiadas redirecciones al descargar archivo.'));
           return;
         }
         const nextUrl = new URL(res.headers.location, url).toString();
-        downloadToFile(nextUrl, destPath, redirects + 1).then(resolve).catch(reject);
+        downloadToFileOnce(nextUrl, destPath, redirects + 1).then(resolve).catch(reject);
         return;
       }
       if (status >= 400) {
         res.resume();
-        reject(new Error(`No se pudo descargar video (HTTP ${status}).`));
+        reject(new Error(`No se pudo descargar archivo (HTTP ${status}).`));
         return;
       }
       const fileStream = fs.createWriteStream(destPath);
@@ -91,6 +150,33 @@ const downloadToFile = async (url: string, destPath: string, redirects = 0): Pro
     });
     req.on('error', reject);
   });
+};
+
+const downloadToFile = async (url: string, destPath: string): Promise<void> => {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= DOWNLOAD_RETRY_COUNT; attempt += 1) {
+    try {
+      await downloadToFileOnce(url, destPath);
+      return;
+    } catch (error) {
+      lastError = error;
+      await fsPromises.rm(destPath, { force: true }).catch(() => undefined);
+      const retryable = isRetryableDownloadError(error);
+      if (!retryable || attempt >= DOWNLOAD_RETRY_COUNT) {
+        throw error;
+      }
+      const delay = Math.min(
+        DOWNLOAD_RETRY_MAX_BACKOFF_MS,
+        DOWNLOAD_RETRY_BACKOFF_MS * 2 ** (attempt - 1)
+      );
+      const reason = error instanceof Error ? error.message : String(error || 'desconocido');
+      console.warn(
+        `[reels-worker] Reintento descarga (${attempt}/${DOWNLOAD_RETRY_COUNT - 1}) en ${delay}ms: ${reason}`
+      );
+      await sleep(delay);
+    }
+  }
+  if (lastError) throw lastError;
 };
 
 const cleanupDir = async (dir: string) => {
@@ -477,7 +563,7 @@ const start = async () => {
     );
   }
   console.log(
-    `[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms downloadTimeout=${DOWNLOAD_TIMEOUT_MS}ms processTimeout=${PROCESS_TIMEOUT_MS}ms lockTtl=${LOCK_TTL_MS}ms(lockTtlEnv=${LOCK_TTL_ENV_MS}ms) maxRetries=${MAX_RETRIES}`
+    `[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms downloadTimeout=${DOWNLOAD_TIMEOUT_MS}ms downloadRetry=${DOWNLOAD_RETRY_COUNT} backoff=${DOWNLOAD_RETRY_BACKOFF_MS}-${DOWNLOAD_RETRY_MAX_BACKOFF_MS}ms processTimeout=${PROCESS_TIMEOUT_MS}ms lockTtl=${LOCK_TTL_MS}ms(lockTtlEnv=${LOCK_TTL_ENV_MS}ms) maxRetries=${MAX_RETRIES}`
   );
   await runCycle();
   setInterval(() => {

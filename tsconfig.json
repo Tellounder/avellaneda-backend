@@ -10,6 +10,9 @@
     "outDir": "./dist",
     "rootDir": "."
   },
+  "ts-node": {
+    "files": true
+  },
   "include": ["src/**/*", "prisma/client.ts"],
   "exclude": ["node_modules"]
 }

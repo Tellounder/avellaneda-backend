@@ -2,7 +2,10 @@ import { AdminRole, AuthUserStatus, AuthUserType } from '@prisma/client';
 import prisma from './repo';
 import { firebaseAuth } from '../../lib/firebaseAdmin';
 import { resolveAppUrl, sendEmailTemplate } from '../../services/email.service';
-import { buildForgotPasswordEmailTemplate } from '../../services/emailTemplates';
+import {
+  buildEmailVerificationEmailTemplate,
+  buildForgotPasswordEmailTemplate,
+} from '../../services/emailTemplates';
 
 export type AuthContext = {
   uid: string;
@@ -165,6 +168,35 @@ export const requestPasswordReset = async (inputEmail: string) => {
   if (resetUrl) {
     const template = buildForgotPasswordEmailTemplate({
       resetUrl,
+      appUrl: resolveAppUrl(),
+    });
+    await sendEmailTemplate(email, template, { requireConfigured: true });
+  }
+
+  return { ok: true };
+};
+
+export const requestEmailVerification = async (inputEmail: string) => {
+  const email = normalizeEmail(inputEmail);
+  if (!email || !isValidEmail(email)) {
+    throw { status: 400, message: 'Email invalido.' };
+  }
+  if (!firebaseAuth) {
+    throw new Error('Firebase Admin no configurado.');
+  }
+
+  let verifyUrl: string | null = null;
+  try {
+    verifyUrl = await firebaseAuth.generateEmailVerificationLink(email);
+  } catch (error: any) {
+    if (error?.code !== 'auth/user-not-found') {
+      throw error;
+    }
+  }
+
+  if (verifyUrl) {
+    const template = buildEmailVerificationEmailTemplate({
+      verifyUrl,
       appUrl: resolveAppUrl(),
     });
     await sendEmailTemplate(email, template, { requireConfigured: true });

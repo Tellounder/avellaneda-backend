@@ -207,6 +207,30 @@ export const buildForgotPasswordEmailTemplate = (params: {
   };
 };
 
+export const buildEmailVerificationEmailTemplate = (params: {
+  verifyUrl: string;
+  appUrl: string;
+}): EmailTemplate => {
+  const { html, text } = buildBaseEmail({
+    preheader: 'Confirma tu correo para activar tu cuenta.',
+    badge: 'Verificacion de cuenta',
+    title: 'Confirma tu correo',
+    intro: 'Te enviamos este enlace para validar tu direccion de correo.',
+    detail:
+      'Haz clic en el boton para confirmar tu cuenta. Si no solicitaste este acceso, ignora este mensaje.',
+    ctaLabel: 'Confirmar correo',
+    ctaUrl: params.verifyUrl,
+    note: 'Por seguridad, este enlace es personal y puede vencer.',
+    appUrl: params.appUrl,
+  });
+
+  return {
+    subject: 'Verifica tu correo | Avellaneda en Vivo',
+    html,
+    text,
+  };
+};
+
 export const buildSelfRegisterConfirmationEmailTemplate = (params: {
   shopName: string;
   addressDisplay: string;

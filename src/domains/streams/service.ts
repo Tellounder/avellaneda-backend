@@ -17,12 +17,13 @@ import prisma from './repo';
 import { getShopRatingsMap, updateShopAggregate } from '../../services/ratings.service';
 import { createQuotaTransaction, getLiveQuotaSnapshot, reserveLiveQuota } from '../../services/quota.service';
 import { createNotification, notifyAdmins } from '../notifications/service';
+import { buildRedisKey, getRedisCommandClient } from '../../lib/redis';
 
 const STREAM_VIEW_DEDUP_MS = Math.max(5_000, Number(process.env.STREAM_VIEW_DEDUP_MS || 60_000));
 const recentViewByViewer = new Map<string, number>();
 const DEFAULT_STREAM_TIME_ZONE = 'America/Argentina/Buenos_Aires';
 
-const shouldCountStreamView = (streamId: string, viewerKey?: string) => {
+const shouldCountStreamViewInMemory = (streamId: string, viewerKey?: string) => {
   if (!viewerKey) return true;
   const now = Date.now();
   const key = `${streamId}:${viewerKey}`;
@@ -41,6 +42,24 @@ const shouldCountStreamView = (streamId: string, viewerKey?: string) => {
     }
   }
   return true;
+};
+
+const shouldCountStreamView = async (streamId: string, viewerKey?: string) => {
+  if (!viewerKey) return true;
+
+  const redis = getRedisCommandClient();
+  if (redis) {
+    const redisKey = buildRedisKey('stream-view-dedup', streamId, viewerKey);
+    try {
+      const setResult = await redis.set(redisKey, '1', 'PX', STREAM_VIEW_DEDUP_MS, 'NX');
+      return setResult === 'OK';
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[streams] Redis dedup fallback a memoria: ${message}`);
+    }
+  }
+
+  return shouldCountStreamViewInMemory(streamId, viewerKey);
 };
 
 const normalizePlatform = (value: unknown): SocialPlatform => {
@@ -788,7 +807,7 @@ export const registerStreamView = async (streamId: string, viewerKey?: string) =
   if (stream.hidden || stream.status === StreamStatus.BANNED) {
     return { counted: false, views: stream.views };
   }
-  if (!shouldCountStreamView(streamId, viewerKey)) {
+  if (!(await shouldCountStreamView(streamId, viewerKey))) {
     return { counted: false, views: stream.views };
   }
 

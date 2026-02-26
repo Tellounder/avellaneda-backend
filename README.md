@@ -43,6 +43,10 @@ ENABLE_SANCTIONS_CRON=true
 NOTIFICATION_CRON_MINUTES=5
 NOTIFICATION_WINDOW_MINUTES=15
 SANCTIONS_CRON_MINUTES=30
+REDIS_URL=redis://127.0.0.1:6379
+REDIS_KEY_PREFIX=avvivo
+CHAT_REALTIME_BUS=redis
+CHAT_REALTIME_REDIS_CHANNEL=chat:events
 ```
 
 ## Inicio rapido
@@ -53,6 +57,7 @@ SANCTIONS_CRON_MINUTES=30
 - `npm run dev` - servidor en caliente
 - `npm run start` - servidor directo
 - `npx prisma migrate dev` - migraciones
+- `npm run preflight:cloud` - chequeo de conectividad DB/Redis antes de deploy
 - `npm run import:shops -- /ruta/datos.json` - importar tiendas
 - `npm run backfill:quotawallets` - reparar wallets
 - `npm run sanctions:run` - ejecutar sanciones manualmente

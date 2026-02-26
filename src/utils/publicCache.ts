@@ -1,3 +1,5 @@
+import { buildRedisKey, getRedisCommandClient } from '../lib/redis';
+
 type CacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -29,11 +31,19 @@ export const getOrSetCache = async <T>(
 ): Promise<T> => {
   const cached = getCachedValue<T>(key);
   if (cached !== null) return cached;
+
+  const redisCached = await getRedisCachedValue<T>(key);
+  if (redisCached !== null) {
+    setCachedValue(key, redisCached, ttlMs);
+    return redisCached;
+  }
+
   const existing = inflight.get(key);
   if (existing) return (await existing) as T;
   const promise = loader()
     .then((value) => {
       setCachedValue(key, value, ttlMs);
+      void setRedisCachedValue(key, value, ttlMs);
       inflight.delete(key);
       return value;
     })
@@ -50,5 +60,32 @@ export const invalidateCachePrefix = (prefix: string) => {
     if (key.startsWith(prefix)) {
       cache.delete(key);
     }
+  }
+};
+
+const getRedisCachedValue = async <T>(key: string): Promise<T | null> => {
+  const redis = getRedisCommandClient();
+  if (!redis) return null;
+  const redisKey = buildRedisKey('public-cache', key);
+  try {
+    const raw = await redis.get(redisKey);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[public-cache] Redis read fallback a memoria: ${message}`);
+    return null;
+  }
+};
+
+const setRedisCachedValue = async <T>(key: string, value: T, ttlMs: number) => {
+  const redis = getRedisCommandClient();
+  if (!redis) return;
+  const redisKey = buildRedisKey('public-cache', key);
+  try {
+    await redis.set(redisKey, JSON.stringify(value), 'PX', ttlMs);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[public-cache] Redis write omitido: ${message}`);
   }
 };

@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+import { getRedisRuntime } from '../../lib/redis';
+import { getChatRealtimeRuntime } from '../chat/realtime';
 
 const parseBool = (value?: string) => {
   const normalized = String(value || '')
@@ -31,5 +33,7 @@ export const getStatus = (_req: Request, res: Response) => {
       enabled: parseBool(process.env.ENABLE_STREAMS_CRON),
       intervalMinutes: parseNumber(process.env.STREAMS_CRON_MINUTES, 5),
     },
+    redis: getRedisRuntime(),
+    chatRealtime: getChatRealtimeRuntime(),
   });
 };

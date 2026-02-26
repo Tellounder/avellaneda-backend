@@ -13,9 +13,17 @@ const assertSupabaseConfigured = () => {
   }
 };
 
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+let supabaseClient: ReturnType<typeof createClient> | null = null;
+
+const getSupabaseClient = () => {
+  assertSupabaseConfigured();
+  if (!supabaseClient) {
+    supabaseClient = createClient(supabaseUrl, supabaseKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+  return supabaseClient;
+};
 
 const slugify = (value: string) =>
   value
@@ -48,7 +56,7 @@ export const createSignedUploadUrls = async (
   shopId: string,
   items: UploadItemInput[]
 ): Promise<{ bucket: string; uploads: SignedUploadResult[] }> => {
-  assertSupabaseConfigured();
+  const supabase = getSupabaseClient();
   if (!shopId) {
     throw new Error('shopId requerido.');
   }
@@ -92,6 +100,7 @@ const ensureShopPath = (shopId: string, storagePath: string) => {
 };
 
 const ensureStorageObjectExists = async (bucketName: string, storagePath: string) => {
+  const supabase = getSupabaseClient();
   const normalized = normalizeStoragePath(storagePath);
   const slashIndex = normalized.lastIndexOf('/');
   const folder = slashIndex >= 0 ? normalized.slice(0, slashIndex) : '';
@@ -133,7 +142,7 @@ export const confirmReelUploadPaths = async ({
   type: ReelUploadType;
   paths: string[];
 }) => {
-  assertSupabaseConfigured();
+  const supabase = getSupabaseClient();
   if (!shopId) {
     throw new Error('shopId requerido.');
   }
@@ -185,7 +194,7 @@ export const createSignedChatUploadUrls = async ({
   senderId: string;
   items: UploadItemInput[];
 }): Promise<{ bucket: string; uploads: SignedUploadResult[] }> => {
-  assertSupabaseConfigured();
+  const supabase = getSupabaseClient();
   if (!conversationId) {
     throw new Error('conversationId requerido.');
   }
@@ -236,7 +245,7 @@ export const confirmChatUploadPaths = async ({
   senderId: string;
   paths: string[];
 }) => {
-  assertSupabaseConfigured();
+  const supabase = getSupabaseClient();
   if (!conversationId) {
     throw new Error('conversationId requerido.');
   }
@@ -282,7 +291,7 @@ export const uploadShopImage = async ({
   type: 'LOGO' | 'COVER';
   file: Express.Multer.File;
 }) => {
-  assertSupabaseConfigured();
+  const supabase = getSupabaseClient();
   if (!shopId) {
     throw new Error('shopId requerido.');
   }
@@ -317,7 +326,7 @@ export const uploadQaReportHtml = async ({
   role?: string;
   testerName?: string;
 }) => {
-  assertSupabaseConfigured();
+  const supabase = getSupabaseClient();
   if (!file?.path) {
     throw new Error('Archivo HTML requerido.');
   }
@@ -350,7 +359,7 @@ export const uploadQaReportHtml = async ({
 };
 
 export const downloadQaReportHtml = async (path: string) => {
-  assertSupabaseConfigured();
+  const supabase = getSupabaseClient();
   if (!path) {
     throw new Error('Path requerido.');
   }

@@ -109,9 +109,17 @@ const assertSupabaseConfigured = () => {
   }
 };
 
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+let supabaseClient: ReturnType<typeof createClient> | null = null;
+
+const getSupabaseClient = () => {
+  assertSupabaseConfigured();
+  if (!supabaseClient) {
+    supabaseClient = createClient(supabaseUrl, supabaseKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+  return supabaseClient;
+};
 
 type VideoJob = {
   jobId: string;
@@ -204,7 +212,7 @@ const createTempDir = async () => {
 };
 
 const uploadBuffer = async (filePath: string, buffer: Buffer, contentType: string) => {
-  assertSupabaseConfigured();
+  const supabase = getSupabaseClient();
   const { error } = await supabase.storage.from(reelsBucket).upload(filePath, buffer, {
     contentType,
     upsert: true,
@@ -217,7 +225,7 @@ const uploadBuffer = async (filePath: string, buffer: Buffer, contentType: strin
 };
 
 const uploadFileFromPath = async (storagePath: string, sourcePath: string, contentType: string) => {
-  assertSupabaseConfigured();
+  const supabase = getSupabaseClient();
   const fileStream = fsSync.createReadStream(sourcePath);
   const { error } = await supabase.storage.from(reelsBucket).upload(storagePath, fileStream, {
     contentType,

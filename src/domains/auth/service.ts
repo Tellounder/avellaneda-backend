@@ -19,6 +19,14 @@ export type AuthContext = {
 
 const normalizeEmail = (value?: string | null) => (value || '').trim().toLowerCase();
 const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+const includesText = (value: unknown, text: string) =>
+  String(value || '')
+    .toLowerCase()
+    .includes(text.toLowerCase());
+const isFirebaseUserNotFound = (error: any) =>
+  error?.code === 'auth/user-not-found' ||
+  includesText(error?.message, 'no user record corresponding') ||
+  includesText(error?.errorInfo?.message, 'no user record corresponding');
 
 const ADMIN_EMAILS = new Set(
   (process.env.ADMIN_EMAILS || '')
@@ -156,15 +164,16 @@ export const requestPasswordReset = async (inputEmail: string) => {
     throw new Error('Firebase Admin no configurado.');
   }
 
-  let resetUrl: string | null = null;
   try {
-    resetUrl = await firebaseAuth.generatePasswordResetLink(email);
+    await firebaseAuth.getUserByEmail(email);
   } catch (error: any) {
-    if (error?.code !== 'auth/user-not-found') {
-      throw error;
+    if (isFirebaseUserNotFound(error)) {
+      return { ok: true };
     }
+    throw error;
   }
 
+  const resetUrl = await firebaseAuth.generatePasswordResetLink(email);
   if (resetUrl) {
     const template = buildForgotPasswordEmailTemplate({
       resetUrl,

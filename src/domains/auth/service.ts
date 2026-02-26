@@ -27,6 +27,10 @@ const isFirebaseUserNotFound = (error: any) =>
   error?.code === 'auth/user-not-found' ||
   includesText(error?.message, 'no user record corresponding') ||
   includesText(error?.errorInfo?.message, 'no user record corresponding');
+const isFirebaseResetLinkUnavailable = (error: any) =>
+  error?.code === 'auth/internal-error' &&
+  (includesText(error?.message, 'unable to create the email action link') ||
+    includesText(error?.errorInfo?.message, 'unable to create the email action link'));
 
 const ADMIN_EMAILS = new Set(
   (process.env.ADMIN_EMAILS || '')
@@ -167,13 +171,22 @@ export const requestPasswordReset = async (inputEmail: string) => {
   try {
     await firebaseAuth.getUserByEmail(email);
   } catch (error: any) {
-    if (isFirebaseUserNotFound(error)) {
+    if (isFirebaseUserNotFound(error) || isFirebaseResetLinkUnavailable(error)) {
       return { ok: true };
     }
     throw error;
   }
 
-  const resetUrl = await firebaseAuth.generatePasswordResetLink(email);
+  let resetUrl: string | null = null;
+  try {
+    resetUrl = await firebaseAuth.generatePasswordResetLink(email);
+  } catch (error: any) {
+    if (isFirebaseResetLinkUnavailable(error)) {
+      return { ok: true };
+    }
+    throw error;
+  }
+
   if (resetUrl) {
     const template = buildForgotPasswordEmailTemplate({
       resetUrl,

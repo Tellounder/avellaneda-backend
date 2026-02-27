@@ -29,6 +29,8 @@ const LOCK_TTL_MS = Math.max(LOCK_TTL_ENV_MS, PROCESS_TIMEOUT_MS + 60_000);
 const MAX_RETRIES = Math.max(1, Number(process.env.REEL_WORKER_MAX_RETRIES || 5));
 const MAX_REDIRECTS = 3;
 let cycleInProgress = false;
+let workerStarted = false;
+let workerTimer: NodeJS.Timeout | null = null;
 
 const normalizeEditorState = (value: any) => {
   if (!value) return null;
@@ -470,7 +472,11 @@ const runCycle = async () => {
   }
 };
 
-const start = async () => {
+export const startReelsWorker = async () => {
+  if (workerStarted) {
+    return;
+  }
+  workerStarted = true;
   if (!(process.env.NODE_OPTIONS || '').includes('max-old-space-size')) {
     console.warn(
       '[reels-worker] NODE_OPTIONS no define max-old-space-size. Recomendado: --max-old-space-size=512'
@@ -480,15 +486,26 @@ const start = async () => {
     `[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms downloadTimeout=${DOWNLOAD_TIMEOUT_MS}ms processTimeout=${PROCESS_TIMEOUT_MS}ms lockTtl=${LOCK_TTL_MS}ms(lockTtlEnv=${LOCK_TTL_ENV_MS}ms) maxRetries=${MAX_RETRIES}`
   );
   await runCycle();
-  setInterval(() => {
+  workerTimer = setInterval(() => {
     runCycle().catch((error) => console.error('[reels-worker] Error en ciclo:', error));
   }, INTERVAL_MS);
 };
 
-start().catch((error) => {
-  console.error('[reels-worker] Error fatal:', error);
-  process.exit(1);
+export const getReelsWorkerRuntime = () => ({
+  started: workerStarted,
+  batchSize: BATCH_SIZE,
+  intervalMs: INTERVAL_MS,
+  lockTtlMs: LOCK_TTL_MS,
+  maxRetries: MAX_RETRIES,
+  timerActive: Boolean(workerTimer),
 });
+
+if (require.main === module) {
+  startReelsWorker().catch((error) => {
+    console.error('[reels-worker] Error fatal:', error);
+    process.exit(1);
+  });
+}
 
 
 

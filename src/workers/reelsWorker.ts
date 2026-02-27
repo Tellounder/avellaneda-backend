@@ -485,9 +485,12 @@ export const startReelsWorker = async () => {
   console.log(
     `[reels-worker] Iniciado. batch=${BATCH_SIZE} intervalo=${INTERVAL_MS}ms downloadTimeout=${DOWNLOAD_TIMEOUT_MS}ms processTimeout=${PROCESS_TIMEOUT_MS}ms lockTtl=${LOCK_TTL_MS}ms(lockTtlEnv=${LOCK_TTL_ENV_MS}ms) maxRetries=${MAX_RETRIES}`
   );
-  await runCycle();
-  workerTimer = setInterval(() => {
+  const safeRunCycle = () => {
     runCycle().catch((error) => console.error('[reels-worker] Error en ciclo:', error));
+  };
+  safeRunCycle();
+  workerTimer = setInterval(() => {
+    safeRunCycle();
   }, INTERVAL_MS);
 };
 

@@ -138,6 +138,10 @@ const clampDuration = (value: number | undefined, fallback: number) => {
 
 const ENFORCE_SINGLE_PROCESSING_PER_SHOP =
   String(process.env.REEL_SINGLE_PROCESSING_PER_SHOP || 'true').toLowerCase() !== 'false';
+const PROCESSING_STALE_MINUTES = Math.max(
+  15,
+  Number(process.env.REEL_PROCESSING_STALE_MINUTES || 45)
+);
 const MEDIA_VALIDATION_TIMEOUT_MS = Math.max(
   3_000,
   Number(process.env.REEL_MEDIA_VALIDATION_TIMEOUT_MS || 15_000)
@@ -275,6 +279,7 @@ export const createReel = async (
   return prisma.$transaction(
     async (tx) => {
       if (!isAdminOverride && ENFORCE_SINGLE_PROCESSING_PER_SHOP) {
+        const staleCutoff = new Date(Date.now() - PROCESSING_STALE_MINUTES * 60_000);
         const existingProcessing = await tx.reel.findFirst({
           where: {
             shopId: input.shopId,
@@ -282,12 +287,30 @@ export const createReel = async (
             status: ReelStatus.PROCESSING,
             expiresAt: { gte: new Date() },
           },
-          select: { id: true },
+          select: { id: true, createdAt: true },
         });
         if (existingProcessing) {
-          throw new Error(
-            'Ya tenes una historia en procesamiento. Espera que termine para publicar otra.'
-          );
+          const isStale = existingProcessing.createdAt < staleCutoff;
+          if (isStale) {
+            await tx.reel.updateMany({
+              where: {
+                id: existingProcessing.id,
+                shopId: input.shopId,
+                status: ReelStatus.PROCESSING,
+                hidden: false,
+              },
+              data: {
+                status: ReelStatus.HIDDEN,
+                hidden: true,
+                processingJobId: null,
+              },
+            });
+          } else {
+            throw {
+              status: 409,
+              message: 'Ya tenes una historia en procesamiento. Espera que termine para publicar otra.',
+            };
+          }
         }
       }
 

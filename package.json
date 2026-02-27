@@ -17,6 +17,7 @@
     "sanctions:run": "ts-node scripts/run-sanciones.ts",
     "qa:step7": "ts-node scripts/qa-step7-e2e.ts",
     "worker:reels": "npx prisma generate && ts-node src/workers/reelsWorker.ts",
+    "worker:reels:service": "npx prisma generate && ts-node src/workers/reelsWorkerService.ts",
     "worker:maintenance": "npx prisma generate && ts-node src/workers/maintenanceWorker.ts"
   },
   "dependencies": {

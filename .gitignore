@@ -3,3 +3,6 @@ node_modules/
 .env.*
 reports/
 !src/domains/reports/
+
+# Ignore markdown files
+*.md

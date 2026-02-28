@@ -1133,7 +1133,6 @@ export const createShop = async (data: any) => {
         razonSocial: data.razonSocial,
         cuit: data.cuit,
         email: normalizedEmail || data.email,
-        password: data.password,
         address: data.address,
         addressDetails: data.addressDetails || {},
         minimumPurchase: data.minimumPurchase || 0,

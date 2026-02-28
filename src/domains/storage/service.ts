@@ -1,17 +1,7 @@
-import { createClient } from '@supabase/supabase-js';
 import { Storage } from '@google-cloud/storage';
 import fs from 'fs/promises';
 
 const providerRaw = String(process.env.STORAGE_PROVIDER || '').trim().toLowerCase();
-const gcsConfigured = Boolean(String(process.env.GCS_BUCKET || '').trim());
-const storageProvider: 'gcs' | 'supabase' =
-  providerRaw === 'gcs' || (gcsConfigured && providerRaw !== 'supabase') ? 'gcs' : 'supabase';
-
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const supabaseReelsBucket = process.env.SUPABASE_REELS_BUCKET || 'reels';
-const supabaseChatBucket = process.env.SUPABASE_CHAT_BUCKET || supabaseReelsBucket;
-const supabaseReportsBucket = process.env.SUPABASE_REPORTS_BUCKET || supabaseReelsBucket;
 
 const gcsReelsBucket = String(process.env.GCS_BUCKET || '').trim();
 const gcsChatBucket = String(process.env.GCS_CHAT_BUCKET || '').trim() || gcsReelsBucket;
@@ -24,33 +14,22 @@ const gcsSignedUrlTtlMs = Math.max(
   Number(process.env.GCS_SIGNED_UPLOAD_EXPIRES_MS || 15 * 60 * 1000)
 );
 
-const reelsBucket = storageProvider === 'gcs' ? gcsReelsBucket : supabaseReelsBucket;
-const chatBucket = storageProvider === 'gcs' ? gcsChatBucket : supabaseChatBucket;
-const reportsBucket = storageProvider === 'gcs' ? gcsReportsBucket : supabaseReportsBucket;
+const reelsBucket = gcsReelsBucket;
+const chatBucket = gcsChatBucket;
+const reportsBucket = gcsReportsBucket;
 
 const assertStorageConfigured = () => {
-  if (storageProvider === 'gcs') {
-    if (!gcsReelsBucket) {
-      throw new Error('GCS no configurado. Falta GCS_BUCKET.');
-    }
-    return;
+  if (providerRaw && providerRaw !== 'gcs') {
+    throw new Error(
+      'STORAGE_PROVIDER invalido. El runtime actual solo admite gcs para evitar regresion de stack.'
+    );
   }
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Supabase no configurado. Falta SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY.');
+  if (!gcsReelsBucket) {
+    throw new Error('GCS no configurado. Falta GCS_BUCKET.');
   }
 };
 
-let supabaseClient: ReturnType<typeof createClient> | null = null;
 let gcsClient: Storage | null = null;
-
-const getSupabaseClient = () => {
-  if (!supabaseClient) {
-    supabaseClient = createClient(supabaseUrl, supabaseKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-  }
-  return supabaseClient;
-};
 
 const getGcsClient = () => {
   if (!gcsClient) {
@@ -68,78 +47,41 @@ const encodeObjectPath = (path: string) =>
 
 const buildPublicUrl = (bucket: string, storagePath: string) => {
   const encodedPath = encodeObjectPath(storagePath);
-  if (storageProvider === 'gcs') {
-    if (gcsPublicBaseUrl && bucket === gcsReelsBucket) {
-      return `${gcsPublicBaseUrl}/${encodedPath}`;
-    }
-    return `https://storage.googleapis.com/${bucket}/${encodedPath}`;
+  if (gcsPublicBaseUrl && bucket === gcsReelsBucket) {
+    return `${gcsPublicBaseUrl}/${encodedPath}`;
   }
-  const supabase = getSupabaseClient();
-  const { data } = supabase.storage.from(bucket).getPublicUrl(storagePath);
-  return data.publicUrl;
+  return `https://storage.googleapis.com/${bucket}/${encodedPath}`;
 };
 
 const createSignedUploadUrl = async (bucket: string, storagePath: string, contentType: string) => {
-  if (storageProvider === 'gcs') {
-    const gcs = getGcsClient();
-    const file = gcs.bucket(bucket).file(storagePath);
-    const [signedUrl] = await file.getSignedUrl({
-      version: 'v4',
-      action: 'write',
-      expires: Date.now() + gcsSignedUrlTtlMs,
-      contentType: contentType || 'application/octet-stream',
-    });
-    return signedUrl;
-  }
-
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase.storage.from(bucket).createSignedUploadUrl(storagePath);
-  if (error || !data) {
-    throw new Error(error?.message || 'No se pudo generar URL de subida.');
-  }
-  return data.signedUrl;
+  const gcs = getGcsClient();
+  const file = gcs.bucket(bucket).file(storagePath);
+  const [signedUrl] = await file.getSignedUrl({
+    version: 'v4',
+    action: 'write',
+    expires: Date.now() + gcsSignedUrlTtlMs,
+    contentType: contentType || 'application/octet-stream',
+  });
+  return signedUrl;
 };
 
 const ensureStorageObjectExists = async (bucketName: string, storagePath: string) => {
   const normalized = normalizeStoragePath(storagePath);
   const slashIndex = normalized.lastIndexOf('/');
-  const folder = slashIndex >= 0 ? normalized.slice(0, slashIndex) : '';
   const fileName = slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized;
   if (!fileName) {
     throw new Error('Ruta de archivo invalida.');
   }
 
-  if (storageProvider === 'gcs') {
-    const gcs = getGcsClient();
-    const file = gcs.bucket(bucketName).file(normalized);
-    const [exists] = await file.exists();
-    if (!exists) {
-      throw new Error(`Archivo no encontrado en storage: ${fileName}`);
-    }
-    const [metadata] = await file.getMetadata();
-    const size = Number(metadata?.size || 0);
-    if (Number.isFinite(size) && size <= 0) {
-      throw new Error(`Archivo vacio en storage: ${fileName}`);
-    }
-    return;
-  }
-
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase.storage.from(bucketName).list(folder, {
-    limit: 100,
-    search: fileName,
-  });
-  if (error) {
-    throw new Error(error.message || 'No se pudo validar el archivo subido.');
-  }
-  const match = (data || []).find((entry: any) => entry?.name === fileName);
-  if (!match) {
+  const gcs = getGcsClient();
+  const file = gcs.bucket(bucketName).file(normalized);
+  const [exists] = await file.exists();
+  if (!exists) {
     throw new Error(`Archivo no encontrado en storage: ${fileName}`);
   }
-  const possibleSize = Number(
-    (match as any)?.metadata?.size ?? (match as any)?.metadata?.fileSize ?? (match as any)?.size ?? 0
-  );
-  if (Number.isFinite(possibleSize) && possibleSize <= 0) {
+  const [metadata] = await file.getMetadata();
+  const size = Number(metadata?.size || 0);
+  if (Number.isFinite(size) && size <= 0) {
     throw new Error(`Archivo vacio en storage: ${fileName}`);
   }
 };
@@ -157,28 +99,15 @@ const uploadBuffer = async ({
   contentType: string;
   cacheControl?: string;
 }) => {
-  if (storageProvider === 'gcs') {
-    const gcs = getGcsClient();
-    const file = gcs.bucket(bucket).file(storagePath);
-    await file.save(buffer, {
-      resumable: false,
-      metadata: {
-        contentType,
-        ...(cacheControl ? { cacheControl } : {}),
-      },
-    });
-    return buildPublicUrl(bucket, storagePath);
-  }
-
-  const supabase = getSupabaseClient();
-  const { error } = await supabase.storage.from(bucket).upload(storagePath, buffer, {
-    contentType,
-    ...(cacheControl ? { cacheControl } : {}),
-    upsert: true,
+  const gcs = getGcsClient();
+  const file = gcs.bucket(bucket).file(storagePath);
+  await file.save(buffer, {
+    resumable: false,
+    metadata: {
+      contentType,
+      ...(cacheControl ? { cacheControl } : {}),
+    },
   });
-  if (error) {
-    throw new Error(error.message || 'No se pudo subir el archivo.');
-  }
   return buildPublicUrl(bucket, storagePath);
 };
 
@@ -466,24 +395,14 @@ export const downloadQaReportHtml = async (path: string) => {
   if (invalidPath) {
     throw new Error('Path de reporte invalido.');
   }
-  let html: string;
-  if (storageProvider === 'gcs') {
-    const gcs = getGcsClient();
-    const file = gcs.bucket(reportsBucket).file(normalized);
-    const [exists] = await file.exists();
-    if (!exists) {
-      throw new Error('No se pudo descargar el reporte HTML.');
-    }
-    const [buffer] = await file.download();
-    html = buffer.toString('utf8');
-  } else {
-    const supabase = getSupabaseClient();
-    const { data, error } = await supabase.storage.from(reportsBucket).download(normalized);
-    if (error || !data) {
-      throw new Error(error?.message || 'No se pudo descargar el reporte HTML.');
-    }
-    html = await data.text();
+  const gcs = getGcsClient();
+  const file = gcs.bucket(reportsBucket).file(normalized);
+  const [exists] = await file.exists();
+  if (!exists) {
+    throw new Error('No se pudo descargar el reporte HTML.');
   }
+  const [buffer] = await file.download();
+  const html = buffer.toString('utf8');
   return {
     html,
     bucket: reportsBucket,

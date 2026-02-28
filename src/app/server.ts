@@ -23,7 +23,7 @@ app.listen(PORT, () => {
   if (parseBool(process.env.RUN_SCHEDULERS_IN_API)) {
     startSchedulers();
   }
-  const runReelsWorkerInApi = parseBool(process.env.RUN_REELS_WORKER_IN_API || 'true');
+  const runReelsWorkerInApi = parseBool(process.env.RUN_REELS_WORKER_IN_API || 'false');
   if (runReelsWorkerInApi) {
     void startReelsWorker().catch((error) => {
       console.error('[reels-worker] Error fatal al iniciar desde API:', error);

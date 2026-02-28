@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { Storage } from '@google-cloud/storage';
 import prisma from '../../prisma/client';
 import { ReelStatus } from '@prisma/client';
@@ -13,18 +12,11 @@ import sharp from 'sharp';
 const ffmpeg: any = require('fluent-ffmpeg');
 
 const providerRaw = String(process.env.STORAGE_PROVIDER || '').trim().toLowerCase();
-const gcsConfigured = Boolean(String(process.env.GCS_BUCKET || '').trim());
-const storageProvider: 'gcs' | 'supabase' =
-  providerRaw === 'gcs' || (gcsConfigured && providerRaw !== 'supabase') ? 'gcs' : 'supabase';
-
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const supabaseReelsBucket = process.env.SUPABASE_REELS_BUCKET || 'reels';
 const gcsReelsBucket = String(process.env.GCS_BUCKET || '').trim();
 const gcsPublicBaseUrl = String(process.env.GCS_PUBLIC_BASE_URL || '')
   .trim()
   .replace(/\/+$/g, '');
-const reelsBucket = storageProvider === 'gcs' ? gcsReelsBucket : supabaseReelsBucket;
+const reelsBucket = gcsReelsBucket;
 const TARGET_WIDTH = 720;
 const TARGET_HEIGHT = 1280;
 const MANROPE_FONT_PATH = path.resolve(process.cwd(), 'assets', 'fonts', 'Manrope.ttf');
@@ -115,28 +107,17 @@ const resolveCropRect = (
 };
 
 const assertStorageConfigured = () => {
-  if (storageProvider === 'gcs') {
-    if (!gcsReelsBucket) {
-      throw new Error('GCS no configurado. Falta GCS_BUCKET.');
-    }
-    return;
+  if (providerRaw && providerRaw !== 'gcs') {
+    throw new Error(
+      'STORAGE_PROVIDER invalido. El runtime actual solo admite gcs para evitar regresion de stack.'
+    );
   }
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Supabase no configurado. Falta SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY.');
+  if (!gcsReelsBucket) {
+    throw new Error('GCS no configurado. Falta GCS_BUCKET.');
   }
 };
 
-let supabaseClient: ReturnType<typeof createClient> | null = null;
 let gcsClient: Storage | null = null;
-
-const getSupabaseClient = () => {
-  if (!supabaseClient) {
-    supabaseClient = createClient(supabaseUrl, supabaseKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-  }
-  return supabaseClient;
-};
 
 const getGcsClient = () => {
   if (!gcsClient) {
@@ -154,13 +135,8 @@ const encodeObjectPath = (path: string) =>
 
 const buildPublicUrl = (storagePath: string) => {
   const encodedPath = encodeObjectPath(storagePath);
-  if (storageProvider === 'gcs') {
-    if (gcsPublicBaseUrl) return `${gcsPublicBaseUrl}/${encodedPath}`;
-    return `https://storage.googleapis.com/${reelsBucket}/${encodedPath}`;
-  }
-  const supabase = getSupabaseClient();
-  const { data } = supabase.storage.from(reelsBucket).getPublicUrl(storagePath);
-  return data.publicUrl;
+  if (gcsPublicBaseUrl) return `${gcsPublicBaseUrl}/${encodedPath}`;
+  return `https://storage.googleapis.com/${reelsBucket}/${encodedPath}`;
 };
 
 type VideoJob = {
@@ -255,45 +231,22 @@ const createTempDir = async () => {
 
 const uploadBuffer = async (filePath: string, buffer: Buffer, contentType: string) => {
   assertStorageConfigured();
-  if (storageProvider === 'gcs') {
-    const gcs = getGcsClient();
-    await gcs.bucket(reelsBucket).file(filePath).save(buffer, {
-      resumable: false,
-      metadata: { contentType },
-    });
-    return buildPublicUrl(filePath);
-  }
-  const supabase = getSupabaseClient();
-  const { error } = await supabase.storage.from(reelsBucket).upload(filePath, buffer, {
-    contentType,
-    upsert: true,
+  const gcs = getGcsClient();
+  await gcs.bucket(reelsBucket).file(filePath).save(buffer, {
+    resumable: false,
+    metadata: { contentType },
   });
-  if (error) {
-    throw new Error(error.message || 'No se pudo subir el archivo procesado.');
-  }
   return buildPublicUrl(filePath);
 };
 
 const uploadFileFromPath = async (storagePath: string, sourcePath: string, contentType: string) => {
   assertStorageConfigured();
-  if (storageProvider === 'gcs') {
-    const gcs = getGcsClient();
-    await gcs.bucket(reelsBucket).upload(sourcePath, {
-      destination: storagePath,
-      resumable: false,
-      metadata: { contentType },
-    });
-    return buildPublicUrl(storagePath);
-  }
-  const supabase = getSupabaseClient();
-  const fileStream = fsSync.createReadStream(sourcePath);
-  const { error } = await supabase.storage.from(reelsBucket).upload(storagePath, fileStream, {
-    contentType,
-    upsert: true,
+  const gcs = getGcsClient();
+  await gcs.bucket(reelsBucket).upload(sourcePath, {
+    destination: storagePath,
+    resumable: false,
+    metadata: { contentType },
   });
-  if (error) {
-    throw new Error(error.message || 'No se pudo subir el archivo procesado.');
-  }
   return buildPublicUrl(storagePath);
 };
 

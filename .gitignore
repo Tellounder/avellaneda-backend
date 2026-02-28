@@ -6,3 +6,6 @@ reports/
 
 # Ignore markdown files
 *.md
+
+# Local temp artifacts
+.tmp/

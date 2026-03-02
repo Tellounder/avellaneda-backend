@@ -619,6 +619,23 @@ const toMapNumber = (value: unknown) => {
 const getAddressField = (details: Record<string, unknown>, key: string) =>
   toMapString(details[key] ?? '');
 
+const buildCanonicalAddress = (
+  details: Record<string, unknown>,
+  fallbackAddress: string
+) => {
+  const street = getAddressField(details, 'street');
+  const number = getAddressField(details, 'number');
+  const city = getAddressField(details, 'city');
+  const province = getAddressField(details, 'province');
+  const zip = getAddressField(details, 'zip');
+  const streetLine = [street, number].filter(Boolean).join(' ').trim();
+  const parts = [streetLine, city, province, zip].filter(Boolean);
+  if (parts.length > 0) {
+    return parts.join(', ');
+  }
+  return toMapString(fallbackAddress);
+};
+
 const getSocialUrl = (handles: { platform: SocialPlatform; handle: string }[], platform: SocialPlatform) => {
   const match = handles.find((item) => item.platform === platform);
   if (!match?.handle) return '';
@@ -648,6 +665,14 @@ export const getShopsMapData = async () => {
   return shops.map((shop) => {
     const filteredHandles = filterSocialHandlesByPlan(shop.plan, shop.socialHandles || []);
     const details = (shop.addressDetails || {}) as Record<string, unknown>;
+    const street = getAddressField(details, 'street');
+    const number = getAddressField(details, 'number');
+    const city = getAddressField(details, 'city');
+    const province = getAddressField(details, 'province');
+    const zip = getAddressField(details, 'zip');
+    const addressDisplay = toMapString(shop.addressDisplay || shop.address || '');
+    const canonicalAddress = buildCanonicalAddress(details, addressDisplay);
+    const mapsUrl = toMapString(details.mapsUrl);
     const publicContactsEnabled =
       shop.contactsPublic !== false && shop.visibilityState !== ShopVisibilityState.DIMMED;
     const effectiveHandles = publicContactsEnabled ? filteredHandles : [];
@@ -665,16 +690,21 @@ export const getShopsMapData = async () => {
       'Mail': publicContactsEnabled ? toMapString(shop.email) : '',
       'Celular': toMapString(whatsapp),
       'Mínimo de Compra': shop.minimumPurchase ?? 0,
-      'Calle': getAddressField(details, 'street'),
-      'Código postal': getAddressField(details, 'zip'),
-      'Ciudad': getAddressField(details, 'city'),
-      'Provincia': getAddressField(details, 'province'),
+      'Direccion': canonicalAddress || addressDisplay,
+      'Calle': street,
+      'Altura': number,
+      'Numero': number,
+      'Código postal': zip,
+      'Codigo postal': zip,
+      'Ciudad': city,
+      'Provincia': province,
       'Plan de Suscripcion': toMapString(shop.plan),
       'Estado de visibilidad': toMapString(shop.visibilityState),
       'Logo_URL': toMapString(shop.logoUrl),
       'imagen_destacada_url': toMapString(shop.coverUrl),
       'url_catalogo': toMapString(details.catalogUrl),
       'Instagram_URL': getSocialUrl(effectiveHandles, 'Instagram'),
+      'mapsUrl': mapsUrl,
       'url_tienda': toMapString(shop.website),
       'url_imagen': toMapString(details.imageUrl),
       'imagen_tienda_url': toMapString(details.storeImageUrl),

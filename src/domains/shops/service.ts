@@ -72,6 +72,7 @@ type IntakeMetaAuditEntry = {
   };
   extra?: Record<string, unknown>;
 };
+type ResetIntent = 'self_register' | 'shop_invite' | 'shop_reset';
 
 const SOCIAL_PLATFORM_BY_KEY: Record<string, SocialPlatform> = {
   instagram: 'Instagram',
@@ -198,6 +199,23 @@ const ensureFirebaseUser = async (email: string) => {
     }
     throw error;
   }
+};
+
+const buildResetContinueUrl = (intent: ResetIntent) => {
+  const baseUrl = resolveAppUrl().trim().replace(/\/+$/g, '');
+  const continueUrl = new URL(`${baseUrl}/reset`);
+  continueUrl.searchParams.set('intent', intent);
+  return continueUrl.toString();
+};
+
+const generateShopResetLink = async (email: string, intent: ResetIntent) => {
+  if (!firebaseAuth) {
+    throw new Error('Firebase Admin no configurado.');
+  }
+  return firebaseAuth.generatePasswordResetLink(email, {
+    url: buildResetContinueUrl(intent),
+    handleCodeInApp: false,
+  });
 };
 
 const sendShopAccessEmail = async (params: {
@@ -1022,10 +1040,22 @@ export const createSelfRegisteredShop = async (
   });
 
   try {
+    let activationUrl = resolveAppUrl();
+    try {
+      await ensureFirebaseUser(email);
+      activationUrl = await generateShopResetLink(email, 'self_register');
+    } catch (error) {
+      console.error(
+        `[shops:self-register] No se pudo generar reset link para ${email}. Se envia fallback a appUrl:`,
+        error
+      );
+    }
+
     const confirmationTemplate = buildSelfRegisterConfirmationEmailTemplate({
       shopName: createdShop.name,
       addressDisplay: createdShop.addressDisplay || createdShop.address || 'Direccion informada',
       appUrl: resolveAppUrl(),
+      activationUrl,
     });
     await sendEmailTemplate(email, confirmationTemplate);
   } catch (error) {
@@ -1184,7 +1214,7 @@ export const createShop = async (data: any) => {
   if (normalizedEmail && isValidEmail(normalizedEmail) && !requiresEmailFix && firebaseAuth) {
     try {
       await ensureFirebaseUser(normalizedEmail);
-      const resetLink = await firebaseAuth.generatePasswordResetLink(normalizedEmail);
+      const resetLink = await generateShopResetLink(normalizedEmail, 'shop_invite');
       await sendShopAccessEmail({
         email: normalizedEmail,
         shopName: normalizeText(createdShop.name) || 'Tu tienda',
@@ -1794,7 +1824,7 @@ export const resetShopPassword = async (id: string) => {
     }
   }
 
-  const resetLink = await firebaseAuth.generatePasswordResetLink(email);
+  const resetLink = await generateShopResetLink(email, 'shop_reset');
   const shopName = normalizeText(shop.name) || 'Tu tienda';
   let emailSent = false;
   try {
@@ -1828,7 +1858,7 @@ export const sendShopInvite = async (id: string) => {
   if (!firebaseAuth) {
     throw new Error('Firebase Admin no configurado.');
   }
-  const resetLink = await firebaseAuth.generatePasswordResetLink(email);
+  const resetLink = await generateShopResetLink(email, 'shop_invite');
   await sendShopAccessEmail({
     email,
     shopName: normalizeText(shop.name) || 'Tu tienda',

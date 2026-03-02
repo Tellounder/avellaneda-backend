@@ -235,23 +235,154 @@ export const buildSelfRegisterConfirmationEmailTemplate = (params: {
   shopName: string;
   addressDisplay: string;
   appUrl: string;
+  activationUrl?: string;
 }): EmailTemplate => {
-  const { html, text } = buildBaseEmail({
-    preheader: 'Recibimos tu auto-registro de tienda.',
-    badge: 'Auto-registro',
-    title: 'Registro recibido correctamente',
-    intro: `Gracias ${params.shopName}. Tu tienda ya ingreso en estado pendiente de revision.`,
-    detail: `Direccion registrada: ${params.addressDisplay}.`,
-    ctaLabel: 'Ver plataforma',
-    ctaUrl: params.appUrl,
-    note:
-      'Un administrador puede contactarte para validar datos y completar la activacion comercial.',
-    appUrl: params.appUrl,
-    footerHint: 'Canal no-reply: para soporte usa los canales oficiales de administracion.',
-  });
+  const shopName = escapeHtml(params.shopName || 'Tu tienda');
+  const addressDisplay = escapeHtml(params.addressDisplay || 'Direccion informada');
+  const appUrl = escapeHtml(params.appUrl);
+  const activationUrl = escapeHtml(params.activationUrl || params.appUrl);
+  const progress = 60;
+  const remaining = 40;
+
+  const html = `<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="x-apple-disable-message-reformatting" />
+    <title>Tu tienda ya esta al ${progress}%</title>
+  </head>
+  <body style="margin:0;padding:0;background:${BRAND_LIGHT};font-family:Arial,Helvetica,sans-serif;color:${BRAND_TEXT};">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+      ${shopName}, tu tienda ya esta al ${progress}% de activacion.
+    </div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:${BRAND_LIGHT};padding:32px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border-radius:20px;overflow:hidden;border:1px solid #e8ebf4;">
+            <tr>
+              <td style="background:${BRAND_DARK};padding:26px 28px;">
+                <div style="display:inline-block;background:rgba(255,255,255,0.12);color:#ffffff;padding:6px 12px;border-radius:999px;font-size:12px;letter-spacing:0.4px;">
+                  Auto-registro
+                </div>
+                <h1 style="margin:16px 0 8px 0;font-size:28px;line-height:1.2;color:#ffffff;">Bienvenida, ${shopName}</h1>
+                <p style="margin:0;color:#cfd6ef;font-size:14px;line-height:1.5;">
+                  Ya activaste el ${progress}% de tu tienda en Avellaneda en Vivo.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:28px;">
+                <p style="margin:0 0 12px 0;font-size:16px;line-height:1.6;color:${BRAND_TEXT};">
+                  Recibimos tu registro y tu tienda ya ingreso en estado pendiente de revision.
+                </p>
+                <p style="margin:0 0 18px 0;font-size:15px;line-height:1.6;color:${BRAND_MUTED};">
+                  Direccion registrada: ${addressDisplay}.
+                </p>
+
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 18px 0;">
+                  <tr>
+                    <td style="font-size:13px;color:${BRAND_MUTED};padding-bottom:8px;">
+                      Progreso de activacion: <strong style="color:${BRAND_TEXT};">${progress}%</strong>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div style="width:100%;height:10px;border-radius:999px;background:#e9edf6;overflow:hidden;">
+                        <div style="width:${progress}%;height:100%;background:linear-gradient(90deg,#f72585 0%,#ff5fa2 100%);"></div>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="font-size:12px;color:${BRAND_MUTED};padding-top:8px;">
+                      Falta completar el ${remaining}% para finalizar la activacion comercial.
+                    </td>
+                  </tr>
+                </table>
+
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 18px 0;">
+                  <tr>
+                    <td style="background:#f8faff;border:1px solid #e7ecf8;border-radius:12px;padding:14px;">
+                      <p style="margin:0 0 8px 0;font-size:13px;color:${BRAND_TEXT};font-weight:700;">Ya completaste</p>
+                      <p style="margin:0;font-size:13px;color:${BRAND_MUTED};line-height:1.6;">
+                        - Registro de tienda<br />
+                        - Direccion base cargada<br />
+                        - Contacto inicial informado
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 20px 0;">
+                  <tr>
+                    <td style="background:#fff6fa;border:1px solid #ffd7e8;border-radius:12px;padding:14px;">
+                      <p style="margin:0 0 8px 0;font-size:13px;color:${BRAND_TEXT};font-weight:700;">Para completar tu activacion</p>
+                      <p style="margin:0;font-size:13px;color:${BRAND_MUTED};line-height:1.6;">
+                        1) Definir/actualizar clave de acceso<br />
+                        2) Ingresar y validar tu panel<br />
+                        3) Completar datos comerciales finales
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+
+                <table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0;">
+                  <tr>
+                    <td style="border-radius:12px;background:${BRAND_PRIMARY};">
+                      <a href="${activationUrl}" target="_blank" rel="noopener noreferrer"
+                         style="display:inline-block;padding:14px 20px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;">
+                        Completar activacion
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+
+                <p style="margin:0 0 16px 0;font-size:13px;line-height:1.55;color:${BRAND_MUTED};">
+                  Un administrador puede contactarte para validar datos y finalizar la habilitacion.
+                </p>
+                <p style="margin:0;font-size:13px;line-height:1.55;color:${BRAND_MUTED};">
+                  Canal no-reply: para soporte usa los canales oficiales de administracion.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 28px 24px 28px;border-top:1px solid #edf0f7;">
+                <a href="${appUrl}" target="_blank" rel="noopener noreferrer"
+                   style="font-size:13px;color:${BRAND_PRIMARY};text-decoration:none;font-weight:700;">
+                  Ir a avellanedaenvivo.com.ar
+                </a>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  const text = [
+    `Bienvenida, ${params.shopName}`,
+    '',
+    `Tu tienda ya esta al ${progress}% de activacion.`,
+    `Direccion registrada: ${params.addressDisplay}.`,
+    '',
+    'Ya completaste:',
+    '- Registro de tienda',
+    '- Direccion base cargada',
+    '- Contacto inicial informado',
+    '',
+    'Para completar tu activacion:',
+    '1) Definir/actualizar clave de acceso',
+    '2) Ingresar y validar tu panel',
+    '3) Completar datos comerciales finales',
+    '',
+    `Completar activacion: ${params.activationUrl || params.appUrl}`,
+    '',
+    'Canal no-reply: para soporte usa los canales oficiales de administracion.',
+  ].join('\n');
 
   return {
-    subject: 'Recibimos tu registro de tienda | Avellaneda en Vivo',
+    subject: `Tu tienda ya esta al ${progress}% | Avellaneda en Vivo`,
     html,
     text,
   };

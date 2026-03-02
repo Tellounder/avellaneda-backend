@@ -31,6 +31,12 @@ const isFirebaseResetLinkUnavailable = (error: any) =>
   error?.code === 'auth/internal-error' &&
   (includesText(error?.message, 'unable to create the email action link') ||
     includesText(error?.errorInfo?.message, 'unable to create the email action link'));
+const buildResetContinueUrl = (intent: 'forgot_password') => {
+  const baseUrl = resolveAppUrl().trim().replace(/\/+$/g, '');
+  const continueUrl = new URL(`${baseUrl}/reset`);
+  continueUrl.searchParams.set('intent', intent);
+  return continueUrl.toString();
+};
 
 const ADMIN_EMAILS = new Set(
   (process.env.ADMIN_EMAILS || '')
@@ -179,7 +185,10 @@ export const requestPasswordReset = async (inputEmail: string) => {
 
   let resetUrl: string | null = null;
   try {
-    resetUrl = await firebaseAuth.generatePasswordResetLink(email);
+    resetUrl = await firebaseAuth.generatePasswordResetLink(email, {
+      url: buildResetContinueUrl('forgot_password'),
+      handleCodeInApp: false,
+    });
   } catch (error: any) {
     if (isFirebaseResetLinkUnavailable(error)) {
       return { ok: true };

@@ -143,6 +143,8 @@ const DM_CATALOG_HOSTS = ['distritomoda.com.ar', 'distritomoda.com'];
 const SELF_REGISTER_DEFAULT_COUNTRY = process.env.SELF_REGISTER_GEOCODE_COUNTRY || 'Argentina';
 const SELF_REGISTER_DEFAULT_PROVINCE = process.env.SELF_REGISTER_GEOCODE_PROVINCE || 'Buenos Aires';
 const SELF_REGISTER_DEFAULT_CITY = process.env.SELF_REGISTER_GEOCODE_CITY || 'Avellaneda';
+const SELF_REGISTER_MIN_STORE_NAME_LEN = 4;
+const SELF_REGISTER_MIN_RAZON_SOCIAL_LEN = 4;
 const NOMINATIM_URL =
   process.env.SELF_REGISTER_GEOCODE_URL || 'https://nominatim.openstreetmap.org/search';
 const NOMINATIM_USER_AGENT =
@@ -268,6 +270,27 @@ const normalizeForMatch = (value: unknown) =>
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+const normalizeTokenForMatch = (value: unknown) => normalizeForMatch(value).replace(/\s+/g, '');
+const canonicalProvinceForMatch = (value: unknown) => {
+  const normalized = normalizeTokenForMatch(value);
+  if (!normalized) return '';
+  if (
+    normalized === 'caba' ||
+    normalized.includes('ciudaddebuenosaires') ||
+    normalized.includes('capitalfederal')
+  ) {
+    return 'caba';
+  }
+  if (
+    normalized === 'buenosaires' ||
+    normalized.includes('provinciadebuenosaires') ||
+    normalized.includes('bsas')
+  ) {
+    return 'buenosaires';
+  }
+  return normalized;
+};
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const createSelfRegisterError = (
   status: number,
@@ -412,19 +435,19 @@ export const validateSelfRegisterDraft = async (
     const cuit = normalizeCuit(input?.cuit);
     const normalizedName = normalizeForMatch(storeName);
 
-    if (!storeName || storeName.length < 2) {
+    if (!storeName || storeName.length < SELF_REGISTER_MIN_STORE_NAME_LEN) {
       throw createSelfRegisterError(400, 'Ingresa un nombre comercial valido.', {
         code: 'INVALID_STORE_NAME',
         fieldErrors: {
-          storeName: 'El nombre comercial debe tener al menos 2 caracteres.',
+          storeName: `El nombre comercial debe tener al menos ${SELF_REGISTER_MIN_STORE_NAME_LEN} caracteres.`,
         },
       });
     }
-    if (!razonSocial || razonSocial.length < 3) {
+    if (!razonSocial || razonSocial.length < SELF_REGISTER_MIN_RAZON_SOCIAL_LEN) {
       throw createSelfRegisterError(400, 'Ingresa una razon social valida.', {
         code: 'INVALID_RAZON_SOCIAL',
         fieldErrors: {
-          razonSocial: 'La razon social debe tener al menos 3 caracteres.',
+          razonSocial: `La razon social debe tener al menos ${SELF_REGISTER_MIN_RAZON_SOCIAL_LEN} caracteres.`,
         },
       });
     }
@@ -482,16 +505,16 @@ export const validateSelfRegisterDraft = async (
     const normalizedName = normalizeForMatch(storeName);
     const address = buildSelfRegisterAddress(input?.address);
 
-    if (!storeName || storeName.length < 2) {
+    if (!storeName || storeName.length < SELF_REGISTER_MIN_STORE_NAME_LEN) {
       throw createSelfRegisterError(400, 'Ingresa un nombre comercial valido.', {
         code: 'INVALID_STORE_NAME',
         fieldErrors: {
-          storeName: 'El nombre comercial debe tener al menos 2 caracteres.',
+          storeName: `El nombre comercial debe tener al menos ${SELF_REGISTER_MIN_STORE_NAME_LEN} caracteres.`,
         },
       });
     }
 
-    const occupancy = await getAddressOccupancy(address.normalizedAddressBase);
+    const occupancy = await getAddressOccupancy(address);
     if (occupancy.hasShops && !address.isGallery) {
       const message = occupancy.hasGallery
         ? 'Esta direccion figura como galeria. Presiona "¿es una galeria?" y completa el local.'
@@ -510,6 +533,19 @@ export const validateSelfRegisterDraft = async (
     }
 
     if (address.isGallery && address.galleryLocal) {
+      if (hasAddressGalleryLocalCollision(occupancy.rows, address.galleryLocal)) {
+        throw createSelfRegisterError(
+          409,
+          `Ya existe una tienda registrada en ese local (${address.galleryLocal}).`,
+          {
+            code: 'DUPLICATE_GALLERY_LOCAL',
+            fieldErrors: {
+              galleryLocal: `El local ${address.galleryLocal} ya esta ocupado.`,
+            },
+          }
+        );
+      }
+
       const duplicateByAddressLocal = await prisma.shop.findFirst({
         where: {
           normalizedAddressBase: address.normalizedAddressBase,
@@ -529,6 +565,16 @@ export const validateSelfRegisterDraft = async (
           }
         );
       }
+    }
+
+    if (hasAddressNameCollision(occupancy.rows, normalizedName)) {
+      throw createSelfRegisterError(409, 'Ya existe una tienda con ese nombre en esa direccion.', {
+        code: 'DUPLICATE_STORE_AT_ADDRESS',
+        fieldErrors: {
+          storeName: 'Ese nombre ya existe en esta direccion.',
+          address: 'Esta direccion ya tiene una tienda con ese nombre.',
+        },
+      });
     }
 
     const duplicateByAddressAndName = await prisma.shop.findFirst({
@@ -888,27 +934,141 @@ const buildSelfRegisterAddress = (rawAddress: SelfRegisterAddressInput | undefin
   };
 };
 
-const getAddressOccupancy = async (normalizedAddressBase: string) => {
+type AddressOccupancyLookup = {
+  street: string;
+  number: string;
+  city: string;
+  province: string;
+  normalizedAddressBase: string;
+};
+
+type AddressOccupancyRow = {
+  id: string;
+  name: string;
+  isGallery: boolean;
+  galleryLocal: string | null;
+  normalizedAddressBase: string | null;
+  address: string | null;
+  addressDisplay: string | null;
+  addressDetails: Prisma.JsonValue | null;
+};
+
+const readAddressDetailsText = (value: Prisma.JsonValue | null, key: string) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  const payload = value as Record<string, unknown>;
+  return normalizeText(payload[key] || '');
+};
+
+const parseLegacyAddressText = (address: unknown) => {
+  const raw = normalizeText(address);
+  if (!raw) {
+    return {
+      street: '',
+      number: '',
+      city: '',
+      province: '',
+    };
+  }
+
+  const parts = raw.split(',').map((part) => normalizeText(part));
+  const firstSegment = parts[0] || '';
+  const numberMatches = firstSegment.match(/\b\d+[a-zA-Z0-9/-]*\b/g) || [];
+  const number = normalizeText(numberMatches[0] || '');
+  let street = firstSegment;
+  if (number) {
+    const numberRegex = new RegExp(`\\b${escapeRegex(number)}\\b`, 'ig');
+    street = normalizeText(street.replace(numberRegex, ' '));
+  }
+  street = normalizeText(street.replace(/\b\d+[a-zA-Z0-9/-]*\b/g, ' '));
+
+  return {
+    street,
+    number,
+    city: parts[1] || '',
+    province: parts[2] || '',
+  };
+};
+
+const extractComparableAddress = (row: AddressOccupancyRow) => {
+  const detailsStreet = readAddressDetailsText(row.addressDetails, 'street');
+  const detailsNumber = readAddressDetailsText(row.addressDetails, 'number');
+  const detailsCity = readAddressDetailsText(row.addressDetails, 'city');
+  const detailsProvince = readAddressDetailsText(row.addressDetails, 'province');
+
+  const legacyParsed = parseLegacyAddressText(row.addressDisplay || row.address || '');
+  return {
+    street: detailsStreet || legacyParsed.street,
+    number: detailsNumber || legacyParsed.number,
+    city: detailsCity || legacyParsed.city,
+    province: detailsProvince || legacyParsed.province,
+  };
+};
+
+const isSameLegacyAddress = (row: AddressOccupancyRow, input: AddressOccupancyLookup) => {
+  if (
+    row.normalizedAddressBase &&
+    normalizeForMatch(row.normalizedAddressBase) === normalizeForMatch(input.normalizedAddressBase)
+  ) {
+    return true;
+  }
+
+  const rowAddress = extractComparableAddress(row);
+  const rowStreet = normalizeTokenForMatch(rowAddress.street);
+  const rowNumber = normalizeTokenForMatch(rowAddress.number);
+  const inputStreet = normalizeTokenForMatch(input.street);
+  const inputNumber = normalizeTokenForMatch(input.number);
+
+  if (!rowStreet || !rowNumber || !inputStreet || !inputNumber) return false;
+  if (rowStreet !== inputStreet || rowNumber !== inputNumber) return false;
+
+  const rowProvince = canonicalProvinceForMatch(rowAddress.province);
+  const inputProvince = canonicalProvinceForMatch(input.province);
+  if (rowProvince && inputProvince && rowProvince !== inputProvince) return false;
+
+  return true;
+};
+
+const getAddressOccupancy = async (address: AddressOccupancyLookup) => {
   const rows = await prisma.shop.findMany({
     where: {
-      normalizedAddressBase,
+      OR: [
+        { normalizedAddressBase: address.normalizedAddressBase },
+        { address: { contains: address.street, mode: 'insensitive' } },
+        { addressDisplay: { contains: address.street, mode: 'insensitive' } },
+      ],
     },
     select: {
       id: true,
       name: true,
       isGallery: true,
       galleryLocal: true,
+      normalizedAddressBase: true,
+      address: true,
+      addressDisplay: true,
+      addressDetails: true,
     },
+    take: 500,
   });
-  const hasShops = rows.length > 0;
-  const hasGallery = rows.some((row) => row.isGallery || Boolean(String(row.galleryLocal || '').trim()));
+  const matchedRows = rows.filter((row) => isSameLegacyAddress(row, address));
+  const hasShops = matchedRows.length > 0;
+  const hasGallery = matchedRows.some(
+    (row) => row.isGallery || Boolean(String(row.galleryLocal || '').trim())
+  );
   return {
-    rows,
+    rows: matchedRows,
     hasShops,
     hasGallery,
-    count: rows.length,
+    count: matchedRows.length,
   };
 };
+
+const hasAddressGalleryLocalCollision = (rows: AddressOccupancyRow[], galleryLocal: string) => {
+  const target = normalizeForMatch(galleryLocal);
+  return rows.some((row) => normalizeForMatch(row.galleryLocal || '') === target);
+};
+
+const hasAddressNameCollision = (rows: AddressOccupancyRow[], normalizedName: string) =>
+  rows.some((row) => normalizeForMatch(row.name) === normalizedName);
 
 
 const shopSelectBase = {
@@ -1357,19 +1517,19 @@ export const createSelfRegisteredShop = async (
   const socialCount = socialHandles.length + (website ? 1 : 0);
   const address = buildSelfRegisterAddress(input?.address);
 
-  if (!storeName || storeName.length < 2) {
+  if (!storeName || storeName.length < SELF_REGISTER_MIN_STORE_NAME_LEN) {
     throw createSelfRegisterError(400, 'Nombre de tienda invalido.', {
       code: 'INVALID_STORE_NAME',
       fieldErrors: {
-        storeName: 'El nombre comercial debe tener al menos 2 caracteres.',
+        storeName: `El nombre comercial debe tener al menos ${SELF_REGISTER_MIN_STORE_NAME_LEN} caracteres.`,
       },
     });
   }
-  if (!razonSocial || razonSocial.length < 3) {
+  if (!razonSocial || razonSocial.length < SELF_REGISTER_MIN_RAZON_SOCIAL_LEN) {
     throw createSelfRegisterError(400, 'Razon social invalida.', {
       code: 'INVALID_RAZON_SOCIAL',
       fieldErrors: {
-        razonSocial: 'La razon social debe tener al menos 3 caracteres.',
+        razonSocial: `La razon social debe tener al menos ${SELF_REGISTER_MIN_RAZON_SOCIAL_LEN} caracteres.`,
       },
     });
   }
@@ -1493,7 +1653,7 @@ export const createSelfRegisteredShop = async (
     });
   }
 
-  const occupancy = await getAddressOccupancy(address.normalizedAddressBase);
+  const occupancy = await getAddressOccupancy(address);
   if (occupancy.hasShops && !address.isGallery) {
     const message = occupancy.hasGallery
       ? 'Esta direccion figura como galeria. Presiona "¿es una galeria?" y completa el local.'
@@ -1512,6 +1672,19 @@ export const createSelfRegisteredShop = async (
   }
 
   if (address.isGallery && address.galleryLocal) {
+    if (hasAddressGalleryLocalCollision(occupancy.rows, address.galleryLocal)) {
+      throw createSelfRegisterError(
+        409,
+        `Ya existe una tienda registrada en ese local (${address.galleryLocal}).`,
+        {
+          code: 'DUPLICATE_GALLERY_LOCAL',
+          fieldErrors: {
+            galleryLocal: `El local ${address.galleryLocal} ya esta ocupado.`,
+          },
+        }
+      );
+    }
+
     const duplicateByAddressLocal = await prisma.shop.findFirst({
       where: {
         normalizedAddressBase: address.normalizedAddressBase,
@@ -1531,6 +1704,16 @@ export const createSelfRegisteredShop = async (
         }
       );
     }
+  }
+
+  if (hasAddressNameCollision(occupancy.rows, normalizedName)) {
+    throw createSelfRegisterError(409, 'Ya existe una tienda con ese nombre en esa direccion.', {
+      code: 'DUPLICATE_STORE_AT_ADDRESS',
+      fieldErrors: {
+        storeName: 'Ese nombre ya existe en esta direccion.',
+        address: 'Esta direccion ya tiene una tienda con ese nombre.',
+      },
+    });
   }
 
   const duplicateByAddressAndName = await prisma.shop.findFirst({

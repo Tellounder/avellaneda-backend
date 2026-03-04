@@ -283,6 +283,26 @@ export const validateSelfRegisterStep = async (req: Request, res: Response) => {
   }
 };
 
+export const checkSelfRegisterCuit = async (req: Request, res: Response) => {
+  try {
+    const cuit = String(req.query?.cuit || req.body?.cuit || '').trim();
+    const result = await ShopsService.checkSelfRegisterCuitExists(cuit);
+    res.json({
+      ok: true,
+      exists: result.exists,
+    });
+  } catch (error: any) {
+    const status = Number(error?.status) || 500;
+    res.status(status).json({
+      ok: false,
+      message: error?.message || 'No se pudo validar CUIT.',
+      ...(error?.code ? { code: error.code } : {}),
+      ...(error?.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+      ...(error?.meta ? { meta: error.meta } : {}),
+    });
+  }
+};
+
 export const updateShop = async (req: Request, res: Response) => {
   try {
     const payload =

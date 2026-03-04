@@ -9,6 +9,7 @@ const router = Router();
 router.post('/', requireAdmin, ShopsController.createShop);
 router.post('/self-register', selfRegisterRateLimit(), ShopsController.selfRegisterShop);
 router.post('/self-register/validate', selfRegisterRateLimit(), ShopsController.validateSelfRegisterStep);
+router.get('/self-register/check-cuit', ShopsController.checkSelfRegisterCuit);
 // -------------------------------------------------------
 
 router.get('/', ShopsController.getShops);

@@ -418,6 +418,32 @@ export const isShopEmail = async (email: string) => {
   return Boolean(existing);
 };
 
+export const checkSelfRegisterCuitExists = async (cuitRaw: string) => {
+  const cuit = normalizeCuit(cuitRaw);
+  if (!cuit || !isValidCuit(cuit)) {
+    throw createSelfRegisterError(400, 'Ingresa un CUIT valido.', {
+      code: 'INVALID_CUIT',
+      fieldErrors: {
+        cuit: 'Ingresa un CUIT valido.',
+      },
+    });
+  }
+
+  const existing = await prisma.shop.findFirst({
+    where: {
+      cuit: {
+        equals: cuit,
+        mode: 'insensitive',
+      },
+    },
+    select: { id: true },
+  });
+
+  return {
+    exists: Boolean(existing),
+  };
+};
+
 export const validateSelfRegisterDraft = async (
   stepRaw: string,
   input: SelfRegisterInput

@@ -8,6 +8,7 @@ const router = Router();
 // --- LÍNEA NUEVA: Habilitamos la creación de tiendas ---
 router.post('/', requireAdmin, ShopsController.createShop);
 router.post('/self-register', selfRegisterRateLimit(), ShopsController.selfRegisterShop);
+router.post('/self-register/validate', selfRegisterRateLimit(), ShopsController.validateSelfRegisterStep);
 // -------------------------------------------------------
 
 router.get('/', ShopsController.getShops);

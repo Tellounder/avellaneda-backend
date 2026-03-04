@@ -133,7 +133,7 @@ const normalizeReelType = (value: unknown): ReelType =>
 
 const clampDuration = (value: number | undefined, fallback: number) => {
   if (!value || Number.isNaN(value)) return fallback;
-  return Math.max(5, Math.min(10, Math.floor(value)));
+  return Math.max(5, Math.min(17, Math.floor(value)));
 };
 
 const ENFORCE_SINGLE_PROCESSING_PER_SHOP =

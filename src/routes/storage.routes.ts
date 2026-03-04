@@ -15,7 +15,6 @@ const upload = multer({
 
 router.post('/reels/upload-url', StorageController.createReelUploadUrls);
 router.post('/reels/confirm', StorageController.confirmReelUpload);
-router.post('/reels/upload', upload.array('files', 5), StorageController.uploadReelMedia);
 router.post('/chat/upload-url', StorageController.createChatUploadUrls);
 router.post('/chat/confirm', StorageController.confirmChatUpload);
 router.post('/shops/upload', upload.single('file'), StorageController.uploadShopImage);

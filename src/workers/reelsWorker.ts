@@ -133,6 +133,14 @@ const readLockTimestamp = (editorState: any, createdAt: Date) => {
   return createdAt.getTime();
 };
 
+const readRenderOverlayUrl = (editorState: any) => {
+  const direct = String(editorState?.renderOverlayUrl || '').trim();
+  if (direct) return direct;
+  const nested = String(editorState?.renderOverlay?.url || '').trim();
+  if (nested) return nested;
+  return null;
+};
+
 const releaseStaleLocks = async () => {
   const now = Date.now();
   const locked = await prisma.reel.findMany({
@@ -295,6 +303,29 @@ const processReel = async (reel: {
   };
   try {
     tempDir = await createTempDir();
+    const overlaySourceUrl = readRenderOverlayUrl(baseEditorState);
+    let downloadedOverlayPath: string | null = null;
+    if (overlaySourceUrl) {
+      const overlayExt = getExtensionFromUrl(overlaySourceUrl) || '.png';
+      const overlayPath = path.join(tempDir, `source-overlay${overlayExt}`);
+      try {
+        await withTimeout(
+          downloadToFile(overlaySourceUrl, overlayPath),
+          DOWNLOAD_TIMEOUT_MS,
+          'Descarga de overlay'
+        );
+        const overlayStat = await fsPromises.stat(overlayPath);
+        if (overlayStat.isFile() && overlayStat.size > 0) {
+          downloadedOverlayPath = overlayPath;
+        }
+      } catch (overlayError) {
+        console.warn(
+          `[reels-worker] Overlay opcional no disponible para reel ${reel.id}:`,
+          overlayError
+        );
+      }
+    }
+
     let nextVideoUrl: string | null = null;
     let nextThumbUrl: string | null = null;
     let nextPhotoUrls: string[] = [];
@@ -320,7 +351,8 @@ const processReel = async (reel: {
         (percent) => {
           void reportProgress(percent, 'RENDER_VIDEO');
         },
-        PROCESS_TIMEOUT_MS
+        PROCESS_TIMEOUT_MS,
+        downloadedOverlayPath
       );
       nextVideoUrl = videoUrl;
       nextThumbUrl = thumbnailUrl;
@@ -348,7 +380,8 @@ const processReel = async (reel: {
           tempDir,
           reel.editorState,
           index,
-          PROCESS_TIMEOUT_MS
+          PROCESS_TIMEOUT_MS,
+          downloadedOverlayPath
         );
         nextPhotoUrls.push(processedUrl);
         await reportProgress(((index + 1) / totalPhotos) * 100, 'RENDER_PHOTO_SET');

@@ -46,6 +46,8 @@ type SelfRegisterAddressInput = {
 };
 type SelfRegisterInput = {
   storeName?: string;
+  razonSocial?: string;
+  cuit?: string;
   logoUrl?: string;
   email?: string;
   whatsapp?: string;
@@ -54,8 +56,11 @@ type SelfRegisterInput = {
     termsAccepted?: boolean;
     contactAccepted?: boolean;
   };
+  socialHandles?: Record<string, unknown> | SocialHandleInput[];
+  website?: string;
   intakeMeta?: Record<string, unknown>;
 };
+type SelfRegisterValidationStep = 'identity' | 'address' | 'contact';
 type ModerationActor = {
   authUserId?: string | null;
   email?: string | null;
@@ -121,6 +126,19 @@ const sanitizeWebsite = (value: unknown, catalogUrl?: unknown) => {
   return raw;
 };
 
+const normalizeWebsiteForSelfRegister = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (!parsed.hostname || !parsed.hostname.includes('.')) return '';
+    return parsed.toString().replace(/\/+$/g, '');
+  } catch {
+    return '';
+  }
+};
+
 const normalizeShopStatus = (value: unknown) => {
   if (value === 'PENDING_VERIFICATION') return ShopStatus.PENDING_VERIFICATION;
   if (value === 'ACTIVE') return ShopStatus.ACTIVE;
@@ -131,15 +149,75 @@ const normalizeShopStatus = (value: unknown) => {
 };
 
 const normalizeEmail = (value: unknown) => String(value || '').trim().toLowerCase();
-const normalizePhone = (value: unknown) =>
-  String(value || '')
-    .trim()
-    .replace(/\s+/g, '')
-    .replace(/-/g, '');
 const normalizeText = (value: unknown) =>
   String(value || '')
     .trim()
     .replace(/\s+/g, ' ');
+const normalizeCuit = (value: unknown) =>
+  String(value || '')
+    .replace(/-/g, '')
+    .replace(/\s+/g, '');
+
+const CUIT_WEIGHTS = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2] as const;
+const ARGENTINA_COUNTRY_CODE = '54';
+const ARGENTINA_TRUNK_PREFIX = '0';
+const ARGENTINA_MOBILE_PREFIX = '9';
+const ARGENTINA_LOCAL_MOBILE_TOKEN = '15';
+const ARGENTINA_WHATSAPP_E164_REGEX = /^\+549\d{10,11}$/;
+
+const computeCuitCheckDigit = (firstTenDigits: string) => {
+  const numbers = firstTenDigits.split('').map((digit) => Number(digit));
+  const sum = CUIT_WEIGHTS.reduce((acc, weight, index) => acc + (numbers[index] || 0) * weight, 0);
+  const mod = 11 - (sum % 11);
+  return mod === 11 ? 0 : mod === 10 ? 9 : mod;
+};
+
+const isValidCuit = (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  // Solo se admiten digitos y guiones/espacios para el formato visual.
+  if (!/^[\d-\s]+$/.test(raw)) return false;
+  const digits = normalizeCuit(raw);
+  if (!/^\d{11}$/.test(digits)) return false;
+  const checkDigit = Number(digits[10]);
+  const expected = computeCuitCheckDigit(digits.slice(0, 10));
+  return expected === checkDigit;
+};
+
+const removeLocalMobileToken = (nationalNumber: string) => {
+  for (let areaLength = 2; areaLength <= 4; areaLength += 1) {
+    if (nationalNumber.length <= areaLength + 2) continue;
+    if (nationalNumber.slice(areaLength, areaLength + 2) !== ARGENTINA_LOCAL_MOBILE_TOKEN) continue;
+    const candidate = `${nationalNumber.slice(0, areaLength)}${nationalNumber.slice(areaLength + 2)}`;
+    if (/^\d{10,11}$/.test(candidate)) {
+      return candidate;
+    }
+  }
+  return nationalNumber;
+};
+
+const normalizeArgentineMobileWhatsapp = (value: unknown) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  let digits = raw.replace(/\D+/g, '');
+  if (!digits) return '';
+  if (digits.startsWith(ARGENTINA_COUNTRY_CODE)) {
+    digits = digits.slice(ARGENTINA_COUNTRY_CODE.length);
+  }
+  if (digits.startsWith(ARGENTINA_MOBILE_PREFIX) && digits.length >= 11) {
+    digits = digits.slice(1);
+  }
+  if (digits.startsWith(ARGENTINA_TRUNK_PREFIX)) {
+    digits = digits.slice(1);
+  }
+  digits = removeLocalMobileToken(digits);
+  if (!/^\d{10,11}$/.test(digits)) return '';
+  const normalized = `+549${digits}`;
+  return ARGENTINA_WHATSAPP_E164_REGEX.test(normalized) ? normalized : '';
+};
+
+const isValidArgentineMobileWhatsapp = (value: string) =>
+  ARGENTINA_WHATSAPP_E164_REGEX.test(String(value || '').trim());
 const normalizeForMatch = (value: unknown) =>
   normalizeText(value)
     .toLowerCase()
@@ -254,6 +332,132 @@ export const isShopEmail = async (email: string) => {
     select: { id: true },
   });
   return Boolean(existing);
+};
+
+export const validateSelfRegisterDraft = async (stepRaw: string, input: SelfRegisterInput) => {
+  const step = String(stepRaw || '').trim().toLowerCase() as SelfRegisterValidationStep;
+  if (step !== 'identity' && step !== 'address' && step !== 'contact') {
+    throw { status: 400, message: 'Paso de validacion invalido.' };
+  }
+
+  if (step === 'identity') {
+    const storeName = normalizeText(input?.storeName);
+    const razonSocial = normalizeText(input?.razonSocial);
+    const cuit = normalizeCuit(input?.cuit);
+    const normalizedName = normalizeForMatch(storeName);
+
+    if (!storeName || storeName.length < 2) {
+      throw { status: 400, message: 'Ingresa un nombre comercial valido.' };
+    }
+    if (!razonSocial || razonSocial.length < 3) {
+      throw { status: 400, message: 'Ingresa una razon social valida.' };
+    }
+    if (!cuit || !isValidCuit(cuit)) {
+      throw { status: 400, message: 'Ingresa un CUIT valido.' };
+    }
+
+    const duplicateByCuit = await prisma.shop.findFirst({
+      where: {
+        cuit: {
+          equals: cuit,
+          mode: 'insensitive',
+        },
+      },
+      select: { id: true },
+    });
+    if (duplicateByCuit) {
+      throw {
+        status: 409,
+        message: 'Ya existe una tienda registrada con ese CUIT.',
+      };
+    }
+
+    const duplicateByName = await prisma.shop.findFirst({
+      where: {
+        normalizedName,
+      },
+      select: { id: true },
+    });
+    if (duplicateByName) {
+      throw {
+        status: 409,
+        message: 'Ya existe una tienda registrada con ese nombre comercial.',
+      };
+    }
+
+    return { ok: true };
+  }
+
+  if (step === 'address') {
+    const storeName = normalizeText(input?.storeName);
+    const normalizedName = normalizeForMatch(storeName);
+    const address = buildSelfRegisterAddress(input?.address);
+
+    if (!storeName || storeName.length < 2) {
+      throw { status: 400, message: 'Ingresa un nombre comercial valido.' };
+    }
+
+    if (address.isGallery && address.galleryLocal) {
+      const duplicateByAddressLocal = await prisma.shop.findFirst({
+        where: {
+          normalizedAddressBase: address.normalizedAddressBase,
+          galleryLocal: address.galleryLocal,
+        },
+        select: { id: true },
+      });
+      if (duplicateByAddressLocal) {
+        throw {
+          status: 409,
+          message: `Ya existe una tienda registrada en ese local (${address.galleryLocal}).`,
+        };
+      }
+    }
+
+    const duplicateByAddressAndName = await prisma.shop.findFirst({
+      where: {
+        normalizedAddressBase: address.normalizedAddressBase,
+        normalizedName,
+        OR: [{ galleryLocal: address.galleryLocal }, { galleryLocal: null }],
+      },
+      select: { id: true },
+    });
+    if (duplicateByAddressAndName) {
+      throw {
+        status: 409,
+        message: 'Ya existe una tienda con ese nombre en esa direccion.',
+      };
+    }
+
+    return { ok: true };
+  }
+
+  const email = normalizeEmail(input?.email);
+  const whatsapp = normalizeArgentineMobileWhatsapp(input?.whatsapp);
+  if (!email || !isValidEmail(email)) {
+    throw { status: 400, message: 'Ingresa un email valido.' };
+  }
+  if (!whatsapp || !isValidArgentineMobileWhatsapp(whatsapp)) {
+    throw { status: 400, message: 'Numero de celular argentino invalido.' };
+  }
+
+  const duplicateByContact = await prisma.shop.findFirst({
+    where: {
+      OR: [
+        { email: { equals: email, mode: 'insensitive' } },
+        { contactEmailPrivate: { equals: email, mode: 'insensitive' } },
+        { contactWhatsappPrivate: { equals: whatsapp, mode: 'insensitive' } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (duplicateByContact) {
+    throw {
+      status: 409,
+      message: 'Ya existe una tienda registrada con ese email o WhatsApp.',
+    };
+  }
+
+  return { ok: true };
 };
 
 const hashPassword = (value?: string | null) => {
@@ -929,25 +1133,62 @@ export const createSelfRegisteredShop = async (
   context?: { ip?: string | null; userAgent?: string | null }
 ) => {
   const storeName = normalizeText(input?.storeName);
+  const razonSocial = normalizeText(input?.razonSocial);
+  const cuit = normalizeCuit(input?.cuit);
   const normalizedName = normalizeForMatch(storeName);
   const logoUrl = normalizeText(input?.logoUrl) || null;
   const email = normalizeEmail(input?.email);
-  const whatsapp = normalizePhone(input?.whatsapp);
+  const whatsapp = normalizeArgentineMobileWhatsapp(input?.whatsapp);
   const termsAccepted = Boolean(input?.consents?.termsAccepted);
   const contactAccepted = Boolean(input?.consents?.contactAccepted);
+  const socialHandles = buildSocialHandles(input?.socialHandles);
+  const websiteFromInput =
+    normalizeWebsiteForSelfRegister(
+      input?.website ||
+        (typeof input?.socialHandles === 'object' && input?.socialHandles
+          ? (input.socialHandles as Record<string, unknown>).website
+          : '')
+    ) || '';
+  const website = websiteFromInput || null;
+  const socialCount = socialHandles.length + (website ? 1 : 0);
   const address = buildSelfRegisterAddress(input?.address);
 
   if (!storeName || storeName.length < 2) {
     throw { status: 400, message: 'Nombre de tienda invalido.' };
   }
+  if (!razonSocial || razonSocial.length < 3) {
+    throw { status: 400, message: 'Razon social invalida.' };
+  }
+  if (!cuit || !isValidCuit(cuit)) {
+    throw { status: 400, message: 'CUIT invalido.' };
+  }
   if (!email || !isValidEmail(email)) {
     throw { status: 400, message: 'Email invalido.' };
   }
-  if (!whatsapp || !isValidWhatsappNumber(whatsapp)) {
-    throw { status: 400, message: 'WhatsApp invalido. Usa formato internacional (+549...).' };
+  if (!whatsapp || !isValidArgentineMobileWhatsapp(whatsapp)) {
+    throw { status: 400, message: 'Numero de celular argentino invalido.' };
   }
   if (!termsAccepted || !contactAccepted) {
     throw { status: 400, message: 'Debes aceptar terminos y contacto para continuar.' };
+  }
+  if (socialCount < 1) {
+    throw { status: 400, message: 'Debes informar al menos una red social o web.' };
+  }
+
+  const duplicateByCuit = await prisma.shop.findFirst({
+    where: {
+      cuit: {
+        equals: cuit,
+        mode: 'insensitive',
+      },
+    },
+    select: { id: true },
+  });
+  if (duplicateByCuit) {
+    throw {
+      status: 409,
+      message: 'Ya existe una tienda registrada con ese CUIT.',
+    };
   }
 
   const duplicateByContact = await prisma.shop.findFirst({
@@ -1004,6 +1245,7 @@ export const createSelfRegisteredShop = async (
     ip: context?.ip || null,
     userAgent: context?.userAgent || null,
     termsAcceptedAt: new Date().toISOString(),
+    socialCount,
   };
 
   const createdShop = await prisma.$transaction(async (tx) => {
@@ -1013,6 +1255,9 @@ export const createSelfRegisteredShop = async (
         name: storeName,
         slug,
         logoUrl,
+        razonSocial,
+        cuit,
+        website,
         plan: 'MAP_ONLY',
         planTier: ShopPlanTier.NONE,
         status: ShopStatus.PENDING_VERIFICATION,
@@ -1059,6 +1304,7 @@ export const createSelfRegisteredShop = async (
         streamQuota: 0,
         reelQuota: 0,
         active: true,
+        ...(socialHandles.length > 0 ? { socialHandles: { create: socialHandles } } : {}),
       },
       select: shopPrivateSelect,
     });

@@ -261,6 +261,22 @@ export const selfRegisterShop = async (req: Request, res: Response) => {
   }
 };
 
+export const validateSelfRegisterStep = async (req: Request, res: Response) => {
+  try {
+    const step = String(req.body?.step || '').trim();
+    const payload =
+      req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : req.body || {};
+    await ShopsService.validateSelfRegisterDraft(step, payload);
+    res.json({ ok: true });
+  } catch (error: any) {
+    const status = Number(error?.status) || 500;
+    res.status(status).json({
+      ok: false,
+      message: error?.message || 'No se pudo validar este paso.',
+    });
+  }
+};
+
 export const updateShop = async (req: Request, res: Response) => {
   try {
     const payload =

@@ -1,5 +1,6 @@
 import { Storage } from '@google-cloud/storage';
 import fs from 'fs/promises';
+import path from 'path';
 
 const providerRaw = String(process.env.STORAGE_PROVIDER || '').trim().toLowerCase();
 
@@ -13,6 +14,11 @@ const gcsSignedUrlTtlMs = Math.max(
   60_000,
   Number(process.env.GCS_SIGNED_UPLOAD_EXPIRES_MS || 15 * 60 * 1000)
 );
+const maxReelVideoMb = Math.max(1, Number(process.env.REEL_MAX_SOURCE_VIDEO_MB || 100));
+const maxReelVideoBytes = maxReelVideoMb * 1024 * 1024;
+const allowedReelVideoExtensions = new Set(['.mp4', '.mov']);
+const allowedReelVideoContentTypes = new Set(['video/mp4', 'video/quicktime']);
+const allowedOverlayImageExtensions = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
 const reelsBucket = gcsReelsBucket;
 const chatBucket = gcsChatBucket;
@@ -84,6 +90,15 @@ const ensureStorageObjectExists = async (bucketName: string, storagePath: string
   if (Number.isFinite(size) && size <= 0) {
     throw new Error(`Archivo vacio en storage: ${fileName}`);
   }
+  const contentType = String(metadata?.contentType || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  return {
+    normalizedPath: normalized,
+    size: Number.isFinite(size) ? size : 0,
+    contentType,
+  };
 };
 
 const uploadBuffer = async ({
@@ -181,10 +196,12 @@ export const confirmReelUploadPaths = async ({
   shopId,
   type,
   paths,
+  overlayPath,
 }: {
   shopId: string;
   type: ReelUploadType;
   paths: string[];
+  overlayPath?: string | null;
 }) => {
   assertStorageConfigured();
   if (!shopId) {
@@ -211,11 +228,44 @@ export const confirmReelUploadPaths = async ({
   const uploads: Array<{ path: string; publicUrl: string }> = [];
   for (const rawPath of cleanedPaths) {
     const safePath = ensureShopPath(shopId, rawPath);
-    await ensureStorageObjectExists(reelsBucket, safePath);
+    const objectInfo = await ensureStorageObjectExists(reelsBucket, safePath);
+    if (type === 'VIDEO') {
+      const ext = path.extname(objectInfo.normalizedPath).toLowerCase();
+      if (!allowedReelVideoExtensions.has(ext)) {
+        throw new Error('Formato de video no permitido. Solo mp4/mov.');
+      }
+      if (objectInfo.contentType && !allowedReelVideoContentTypes.has(objectInfo.contentType)) {
+        throw new Error('Tipo MIME de video no permitido. Solo mp4/mov.');
+      }
+      if (objectInfo.size > maxReelVideoBytes) {
+        throw new Error(`Video demasiado pesado. Maximo permitido: ${maxReelVideoMb}MB.`);
+      }
+    }
+    if (type === 'PHOTO_SET' && objectInfo.contentType && !objectInfo.contentType.startsWith('image/')) {
+      throw new Error('Las fotos deben ser imagenes validas.');
+    }
     uploads.push({ path: safePath, publicUrl: buildPublicUrl(reelsBucket, safePath) });
   }
 
-  return { bucket: reelsBucket, uploads };
+  let overlay: { path: string; publicUrl: string } | null = null;
+  const normalizedOverlayPath = String(overlayPath || '').trim();
+  if (normalizedOverlayPath) {
+    const safeOverlayPath = ensureShopPath(shopId, normalizedOverlayPath);
+    const overlayInfo = await ensureStorageObjectExists(reelsBucket, safeOverlayPath);
+    const overlayExt = path.extname(overlayInfo.normalizedPath).toLowerCase();
+    if (!allowedOverlayImageExtensions.has(overlayExt)) {
+      throw new Error('Formato de overlay no permitido. Usa png/jpg/webp.');
+    }
+    if (overlayInfo.contentType && !overlayInfo.contentType.startsWith('image/')) {
+      throw new Error('El overlay debe ser una imagen valida.');
+    }
+    overlay = {
+      path: safeOverlayPath,
+      publicUrl: buildPublicUrl(reelsBucket, safeOverlayPath),
+    };
+  }
+
+  return { bucket: reelsBucket, uploads, overlay };
 };
 
 const ensureChatPath = (prefix: string, storagePath: string) => {

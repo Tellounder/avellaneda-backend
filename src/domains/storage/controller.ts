@@ -10,7 +10,6 @@ import {
   uploadQaReportHtml,
   uploadShopImage as uploadShopImageToStorage,
 } from './service';
-import { processReelUpload, enqueueReelVideoJob } from '../../services/reelsMedia.service';
 import { updateShop } from '../shops/service';
 import prisma from '../chat/repo';
 
@@ -182,7 +181,7 @@ export const createReelUploadUrls = async (req: Request, res: Response) => {
   if (!req.auth) {
     return res.status(401).json({ message: 'Autenticacion requerida.' });
   }
-  const { shopId, type, files } = req.body || {};
+  const { shopId, type, files, overlay } = req.body || {};
   if (!shopId) {
     return res.status(400).json({ message: 'shopId requerido.' });
   }
@@ -200,6 +199,13 @@ export const createReelUploadUrls = async (req: Request, res: Response) => {
         contentType: resolveContentType(file),
       }))
     : [];
+  const normalizedOverlay =
+    overlay && typeof overlay === 'object'
+      ? {
+          ...overlay,
+          contentType: resolveContentType(overlay),
+        }
+      : null;
   if (!normalizedFiles.length) {
     return res.status(400).json({ message: 'Debes subir al menos un archivo.' });
   }
@@ -223,13 +229,34 @@ export const createReelUploadUrls = async (req: Request, res: Response) => {
     }
   }
 
+  if (normalizedOverlay && !isImage(normalizedOverlay.contentType || '')) {
+    return res.status(400).json({ message: 'El overlay debe ser una imagen valida.' });
+  }
+
   try {
-    const payload = normalizedFiles.map((file: any) => ({
+    const sourcePayload = normalizedFiles.map((file: any) => ({
       fileName: file?.fileName || 'upload',
       contentType: file?.contentType || 'application/octet-stream',
     }));
-    const data = await createSignedUploadUrls(shopId, payload);
-    res.json(data);
+    const fullPayload = normalizedOverlay
+      ? [
+          ...sourcePayload,
+          {
+            fileName: normalizedOverlay?.fileName || `overlay-${Date.now()}.png`,
+            contentType: normalizedOverlay?.contentType || 'image/png',
+          },
+        ]
+      : sourcePayload;
+    const data = await createSignedUploadUrls(shopId, fullPayload);
+    const overlayUpload =
+      normalizedOverlay && data.uploads.length > sourcePayload.length
+        ? data.uploads[sourcePayload.length]
+        : null;
+    res.json({
+      bucket: data.bucket,
+      uploads: data.uploads.slice(0, sourcePayload.length),
+      overlayUpload,
+    });
   } catch (error: any) {
     res.status(400).json({ message: error?.message || 'No se pudo generar URLs de subida.' });
   }
@@ -239,7 +266,7 @@ export const confirmReelUpload = async (req: Request, res: Response) => {
   if (!req.auth) {
     return res.status(401).json({ message: 'Autenticacion requerida.' });
   }
-  const { shopId, type, paths } = req.body || {};
+  const { shopId, type, paths, overlayPath } = req.body || {};
   if (!shopId) {
     return res.status(400).json({ message: 'shopId requerido.' });
   }
@@ -254,6 +281,7 @@ export const confirmReelUpload = async (req: Request, res: Response) => {
   const normalizedPaths = Array.isArray(paths)
     ? paths.map((item: any) => String(item || '').trim()).filter(Boolean)
     : [];
+  const normalizedOverlayPath = String(overlayPath || '').trim();
   if (!normalizedPaths.length) {
     return res.status(400).json({ message: 'Debes confirmar al menos un archivo.' });
   }
@@ -269,6 +297,7 @@ export const confirmReelUpload = async (req: Request, res: Response) => {
       shopId,
       type: normalizedType,
       paths: normalizedPaths,
+      overlayPath: normalizedOverlayPath || undefined,
     });
     return res.json(data);
   } catch (error: any) {
@@ -277,64 +306,10 @@ export const confirmReelUpload = async (req: Request, res: Response) => {
 };
 
 export const uploadReelMedia = async (req: Request, res: Response) => {
-  if (!req.auth) {
-    return res.status(401).json({ message: 'Autenticacion requerida.' });
-  }
-  const { shopId, type, editorState } = req.body || {};
-  if (!shopId) {
-    return res.status(400).json({ message: 'shopId requerido.' });
-  }
-  if (req.auth.userType === 'SHOP' && req.auth.shopId !== shopId) {
-    return res.status(403).json({ message: 'Acceso denegado.' });
-  }
-  if (req.auth.userType !== 'SHOP' && req.auth.userType !== 'ADMIN') {
-    return res.status(403).json({ message: 'Permisos insuficientes.' });
-  }
-
-  const normalizedType = type === 'PHOTO_SET' ? 'PHOTO_SET' : 'VIDEO';
-  const files = Array.isArray(req.files) ? req.files : [];
-  if (!files.length) {
-    return res.status(400).json({ message: 'Debes subir al menos un archivo.' });
-  }
-  if (normalizedType === 'VIDEO') {
-    if (files.length !== 1) {
-      return res.status(400).json({ message: 'Solo se permite un video por reel.' });
-    }
-    if (!isVideo(files[0]?.mimetype || '')) {
-      return res.status(400).json({ message: 'El archivo debe ser un video.' });
-    }
-  }
-  if (normalizedType === 'PHOTO_SET') {
-    if (files.length > 5) {
-      return res.status(400).json({ message: 'Maximo 5 fotos por reel.' });
-    }
-    const invalid = files.find((file: any) => !isImage(file?.mimetype || ''));
-    if (invalid) {
-      return res.status(400).json({ message: 'Las fotos deben ser imagenes.' });
-    }
-  }
-
-  try {
-    if (normalizedType === 'VIDEO') {
-      const file = files[0] as Express.Multer.File;
-      const sizeMb = file?.size ? file.size / (1024 * 1024) : 0;
-      const asyncThresholdMb = Number(process.env.REEL_ASYNC_THRESHOLD_MB || 12);
-      if (sizeMb >= asyncThresholdMb) {
-        const jobId = await enqueueReelVideoJob(shopId, file);
-        return res.json({ processing: true, jobId });
-      }
-    }
-
-    const payload = await processReelUpload({
-      shopId,
-      type: normalizedType,
-      files: files as Express.Multer.File[],
-      editorState,
-    });
-    res.json(payload);
-  } catch (error: any) {
-    res.status(400).json({ message: error?.message || 'No se pudo procesar el reel.' });
-  }
+  return res.status(410).json({
+    message:
+      'Endpoint deshabilitado. Usa /storage/reels/upload-url + /storage/reels/confirm para ingesta de reels.',
+  });
 };
 
 export const uploadShopImage = async (req: Request, res: Response) => {

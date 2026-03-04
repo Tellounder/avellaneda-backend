@@ -61,6 +61,51 @@ type SelfRegisterInput = {
   intakeMeta?: Record<string, unknown>;
 };
 type SelfRegisterValidationStep = 'identity' | 'address' | 'contact';
+type SelfRegisterFieldKey =
+  | 'storeName'
+  | 'razonSocial'
+  | 'cuit'
+  | 'address'
+  | 'street'
+  | 'number'
+  | 'city'
+  | 'province'
+  | 'galleryName'
+  | 'galleryLocal'
+  | 'galleryFloor'
+  | 'email'
+  | 'whatsapp'
+  | 'socialHandles'
+  | 'consents';
+type SelfRegisterFieldErrors = Partial<Record<SelfRegisterFieldKey, string>>;
+type SelfRegisterErrorCode =
+  | 'INVALID_STEP'
+  | 'INVALID_STORE_NAME'
+  | 'INVALID_RAZON_SOCIAL'
+  | 'INVALID_CUIT'
+  | 'DUPLICATE_CUIT'
+  | 'DUPLICATE_STORE_NAME'
+  | 'INVALID_ADDRESS'
+  | 'ADDRESS_REQUIRES_GALLERY'
+  | 'DUPLICATE_GALLERY_LOCAL'
+  | 'DUPLICATE_STORE_AT_ADDRESS'
+  | 'INVALID_EMAIL'
+  | 'INVALID_WHATSAPP'
+  | 'DUPLICATE_CONTACT'
+  | 'MISSING_CONSENTS'
+  | 'MISSING_SOCIAL';
+type SelfRegisterServiceError = {
+  status: number;
+  message: string;
+  code?: SelfRegisterErrorCode;
+  fieldErrors?: SelfRegisterFieldErrors;
+  meta?: Record<string, unknown>;
+};
+type SelfRegisterValidationSuccess = {
+  ok: true;
+  notice?: string;
+  meta?: Record<string, unknown>;
+};
 type ModerationActor = {
   authUserId?: string | null;
   email?: string | null;
@@ -223,6 +268,22 @@ const normalizeForMatch = (value: unknown) =>
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+
+const createSelfRegisterError = (
+  status: number,
+  message: string,
+  options?: {
+    code?: SelfRegisterErrorCode;
+    fieldErrors?: SelfRegisterFieldErrors;
+    meta?: Record<string, unknown>;
+  }
+): SelfRegisterServiceError => ({
+  status,
+  message,
+  ...(options?.code ? { code: options.code } : {}),
+  ...(options?.fieldErrors ? { fieldErrors: options.fieldErrors } : {}),
+  ...(options?.meta ? { meta: options.meta } : {}),
+});
 const toMetaObject = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return { ...(value as Record<string, unknown>) };
@@ -334,10 +395,15 @@ export const isShopEmail = async (email: string) => {
   return Boolean(existing);
 };
 
-export const validateSelfRegisterDraft = async (stepRaw: string, input: SelfRegisterInput) => {
+export const validateSelfRegisterDraft = async (
+  stepRaw: string,
+  input: SelfRegisterInput
+): Promise<SelfRegisterValidationSuccess> => {
   const step = String(stepRaw || '').trim().toLowerCase() as SelfRegisterValidationStep;
   if (step !== 'identity' && step !== 'address' && step !== 'contact') {
-    throw { status: 400, message: 'Paso de validacion invalido.' };
+    throw createSelfRegisterError(400, 'Paso de validacion invalido.', {
+      code: 'INVALID_STEP',
+    });
   }
 
   if (step === 'identity') {
@@ -347,13 +413,28 @@ export const validateSelfRegisterDraft = async (stepRaw: string, input: SelfRegi
     const normalizedName = normalizeForMatch(storeName);
 
     if (!storeName || storeName.length < 2) {
-      throw { status: 400, message: 'Ingresa un nombre comercial valido.' };
+      throw createSelfRegisterError(400, 'Ingresa un nombre comercial valido.', {
+        code: 'INVALID_STORE_NAME',
+        fieldErrors: {
+          storeName: 'El nombre comercial debe tener al menos 2 caracteres.',
+        },
+      });
     }
     if (!razonSocial || razonSocial.length < 3) {
-      throw { status: 400, message: 'Ingresa una razon social valida.' };
+      throw createSelfRegisterError(400, 'Ingresa una razon social valida.', {
+        code: 'INVALID_RAZON_SOCIAL',
+        fieldErrors: {
+          razonSocial: 'La razon social debe tener al menos 3 caracteres.',
+        },
+      });
     }
     if (!cuit || !isValidCuit(cuit)) {
-      throw { status: 400, message: 'Ingresa un CUIT valido.' };
+      throw createSelfRegisterError(400, 'Ingresa un CUIT valido.', {
+        code: 'INVALID_CUIT',
+        fieldErrors: {
+          cuit: 'Ingresa un CUIT valido.',
+        },
+      });
     }
 
     const duplicateByCuit = await prisma.shop.findFirst({
@@ -366,10 +447,12 @@ export const validateSelfRegisterDraft = async (stepRaw: string, input: SelfRegi
       select: { id: true },
     });
     if (duplicateByCuit) {
-      throw {
-        status: 409,
-        message: 'Ya existe una tienda registrada con ese CUIT.',
-      };
+      throw createSelfRegisterError(409, 'Ya existe una tienda registrada con ese CUIT.', {
+        code: 'DUPLICATE_CUIT',
+        fieldErrors: {
+          cuit: 'Ese CUIT ya esta registrado.',
+        },
+      });
     }
 
     const duplicateByName = await prisma.shop.findFirst({
@@ -379,10 +462,16 @@ export const validateSelfRegisterDraft = async (stepRaw: string, input: SelfRegi
       select: { id: true },
     });
     if (duplicateByName) {
-      throw {
-        status: 409,
-        message: 'Ya existe una tienda registrada con ese nombre comercial.',
-      };
+      throw createSelfRegisterError(
+        409,
+        'Ya existe una tienda registrada con ese nombre comercial.',
+        {
+          code: 'DUPLICATE_STORE_NAME',
+          fieldErrors: {
+            storeName: 'Ese nombre comercial ya esta registrado.',
+          },
+        }
+      );
     }
 
     return { ok: true };
@@ -394,7 +483,30 @@ export const validateSelfRegisterDraft = async (stepRaw: string, input: SelfRegi
     const address = buildSelfRegisterAddress(input?.address);
 
     if (!storeName || storeName.length < 2) {
-      throw { status: 400, message: 'Ingresa un nombre comercial valido.' };
+      throw createSelfRegisterError(400, 'Ingresa un nombre comercial valido.', {
+        code: 'INVALID_STORE_NAME',
+        fieldErrors: {
+          storeName: 'El nombre comercial debe tener al menos 2 caracteres.',
+        },
+      });
+    }
+
+    const occupancy = await getAddressOccupancy(address.normalizedAddressBase);
+    if (occupancy.hasShops && !address.isGallery) {
+      const message = occupancy.hasGallery
+        ? 'Esta direccion figura como galeria. Presiona "¿es una galeria?" y completa el local.'
+        : 'Esta direccion ya tiene una tienda asignada. Si corresponde a una galeria, presiona "¿es una galeria?".';
+      throw createSelfRegisterError(409, message, {
+        code: 'ADDRESS_REQUIRES_GALLERY',
+        fieldErrors: {
+          address: message,
+        },
+        meta: {
+          showGalleryCta: true,
+          addressHasGallery: occupancy.hasGallery,
+          existingShopsCount: occupancy.count,
+        },
+      });
     }
 
     if (address.isGallery && address.galleryLocal) {
@@ -406,10 +518,16 @@ export const validateSelfRegisterDraft = async (stepRaw: string, input: SelfRegi
         select: { id: true },
       });
       if (duplicateByAddressLocal) {
-        throw {
-          status: 409,
-          message: `Ya existe una tienda registrada en ese local (${address.galleryLocal}).`,
-        };
+        throw createSelfRegisterError(
+          409,
+          `Ya existe una tienda registrada en ese local (${address.galleryLocal}).`,
+          {
+            code: 'DUPLICATE_GALLERY_LOCAL',
+            fieldErrors: {
+              galleryLocal: `El local ${address.galleryLocal} ya esta ocupado.`,
+            },
+          }
+        );
       }
     }
 
@@ -422,22 +540,46 @@ export const validateSelfRegisterDraft = async (stepRaw: string, input: SelfRegi
       select: { id: true },
     });
     if (duplicateByAddressAndName) {
-      throw {
-        status: 409,
-        message: 'Ya existe una tienda con ese nombre en esa direccion.',
-      };
+      throw createSelfRegisterError(409, 'Ya existe una tienda con ese nombre en esa direccion.', {
+        code: 'DUPLICATE_STORE_AT_ADDRESS',
+        fieldErrors: {
+          storeName: 'Ese nombre ya existe en esta direccion.',
+          address: 'Esta direccion ya tiene una tienda con ese nombre.',
+        },
+      });
     }
 
-    return { ok: true };
+    return {
+      ok: true,
+      ...(occupancy.hasGallery
+        ? {
+            notice: 'Esta direccion ya fue declarada como galeria por otra tienda.',
+            meta: {
+              addressHasGallery: true,
+              existingShopsCount: occupancy.count,
+            },
+          }
+        : {}),
+    };
   }
 
   const email = normalizeEmail(input?.email);
   const whatsapp = normalizeArgentineMobileWhatsapp(input?.whatsapp);
   if (!email || !isValidEmail(email)) {
-    throw { status: 400, message: 'Ingresa un email valido.' };
+    throw createSelfRegisterError(400, 'Ingresa un email valido.', {
+      code: 'INVALID_EMAIL',
+      fieldErrors: {
+        email: 'Ingresa un email valido.',
+      },
+    });
   }
   if (!whatsapp || !isValidArgentineMobileWhatsapp(whatsapp)) {
-    throw { status: 400, message: 'Numero de celular argentino invalido.' };
+    throw createSelfRegisterError(400, 'Numero de celular argentino invalido.', {
+      code: 'INVALID_WHATSAPP',
+      fieldErrors: {
+        whatsapp: 'Numero invalido/fuera del area de cobertura.',
+      },
+    });
   }
 
   const duplicateByContact = await prisma.shop.findFirst({
@@ -448,13 +590,39 @@ export const validateSelfRegisterDraft = async (stepRaw: string, input: SelfRegi
         { contactWhatsappPrivate: { equals: whatsapp, mode: 'insensitive' } },
       ],
     },
-    select: { id: true },
+    select: {
+      email: true,
+      contactEmailPrivate: true,
+      contactWhatsappPrivate: true,
+    },
   });
   if (duplicateByContact) {
-    throw {
-      status: 409,
-      message: 'Ya existe una tienda registrada con ese email o WhatsApp.',
+    const normalizedDuplicateEmail = normalizeEmail(duplicateByContact.email);
+    const normalizedDuplicatePrivateEmail = normalizeEmail(duplicateByContact.contactEmailPrivate);
+    const normalizedDuplicateWhatsapp = normalizeArgentineMobileWhatsapp(
+      duplicateByContact.contactWhatsappPrivate
+    );
+    const emailDuplicated =
+      normalizedDuplicateEmail === email || normalizedDuplicatePrivateEmail === email;
+    const whatsappDuplicated = normalizedDuplicateWhatsapp === whatsapp;
+
+    const fieldErrors: SelfRegisterFieldErrors = {
+      ...(emailDuplicated ? { email: 'Ese email ya esta registrado.' } : {}),
+      ...(whatsappDuplicated ? { whatsapp: 'Ese WhatsApp ya esta registrado.' } : {}),
     };
+    const message = emailDuplicated && whatsappDuplicated
+      ? 'Ya existe una tienda registrada con ese email y WhatsApp.'
+      : emailDuplicated
+        ? 'Ya existe una tienda registrada con ese email.'
+        : 'Ya existe una tienda registrada con ese WhatsApp.';
+    throw createSelfRegisterError(409, message, {
+      code: 'DUPLICATE_CONTACT',
+      fieldErrors,
+      meta: {
+        emailDuplicated,
+        whatsappDuplicated,
+      },
+    });
   }
 
   return { ok: true };
@@ -671,13 +839,27 @@ const buildSelfRegisterAddress = (rawAddress: SelfRegisterAddressInput | undefin
   const galleryFloor = normalizeText(rawAddress?.galleryFloor) || null;
 
   if (!street || !number || !city || !province) {
-    throw {
-      status: 400,
-      message: 'Direccion incompleta. Completa calle, altura, ciudad y provincia.',
-    };
+    throw createSelfRegisterError(
+      400,
+      'Direccion incompleta. Completa calle, altura, ciudad y provincia.',
+      {
+        code: 'INVALID_ADDRESS',
+        fieldErrors: {
+          street: !street ? 'Completa la calle.' : undefined,
+          number: !number ? 'Completa la altura.' : undefined,
+          city: !city ? 'Completa la ciudad.' : undefined,
+          province: !province ? 'Completa la provincia.' : undefined,
+        },
+      }
+    );
   }
   if (isGallery && !galleryLocal) {
-    throw { status: 400, message: 'Si es galeria, debes indicar el numero de local.' };
+    throw createSelfRegisterError(400, 'Si es galeria, debes indicar el numero de local.', {
+      code: 'INVALID_ADDRESS',
+      fieldErrors: {
+        galleryLocal: 'Ingresa el local de la galeria.',
+      },
+    });
   }
 
   const addressBase = buildAddressBase({ street, number, city, province });
@@ -703,6 +885,28 @@ const buildSelfRegisterAddress = (rawAddress: SelfRegisterAddressInput | undefin
     addressBase,
     addressDisplay,
     normalizedAddressBase: normalizeForMatch(addressBase),
+  };
+};
+
+const getAddressOccupancy = async (normalizedAddressBase: string) => {
+  const rows = await prisma.shop.findMany({
+    where: {
+      normalizedAddressBase,
+    },
+    select: {
+      id: true,
+      name: true,
+      isGallery: true,
+      galleryLocal: true,
+    },
+  });
+  const hasShops = rows.length > 0;
+  const hasGallery = rows.some((row) => row.isGallery || Boolean(String(row.galleryLocal || '').trim()));
+  return {
+    rows,
+    hasShops,
+    hasGallery,
+    count: rows.length,
   };
 };
 
@@ -1154,25 +1358,79 @@ export const createSelfRegisteredShop = async (
   const address = buildSelfRegisterAddress(input?.address);
 
   if (!storeName || storeName.length < 2) {
-    throw { status: 400, message: 'Nombre de tienda invalido.' };
+    throw createSelfRegisterError(400, 'Nombre de tienda invalido.', {
+      code: 'INVALID_STORE_NAME',
+      fieldErrors: {
+        storeName: 'El nombre comercial debe tener al menos 2 caracteres.',
+      },
+    });
   }
   if (!razonSocial || razonSocial.length < 3) {
-    throw { status: 400, message: 'Razon social invalida.' };
+    throw createSelfRegisterError(400, 'Razon social invalida.', {
+      code: 'INVALID_RAZON_SOCIAL',
+      fieldErrors: {
+        razonSocial: 'La razon social debe tener al menos 3 caracteres.',
+      },
+    });
   }
   if (!cuit || !isValidCuit(cuit)) {
-    throw { status: 400, message: 'CUIT invalido.' };
+    throw createSelfRegisterError(400, 'CUIT invalido.', {
+      code: 'INVALID_CUIT',
+      fieldErrors: {
+        cuit: 'Ingresa un CUIT valido.',
+      },
+    });
   }
   if (!email || !isValidEmail(email)) {
-    throw { status: 400, message: 'Email invalido.' };
+    throw createSelfRegisterError(400, 'Email invalido.', {
+      code: 'INVALID_EMAIL',
+      fieldErrors: {
+        email: 'Ingresa un email valido.',
+      },
+    });
   }
   if (!whatsapp || !isValidArgentineMobileWhatsapp(whatsapp)) {
-    throw { status: 400, message: 'Numero de celular argentino invalido.' };
+    throw createSelfRegisterError(400, 'Numero de celular argentino invalido.', {
+      code: 'INVALID_WHATSAPP',
+      fieldErrors: {
+        whatsapp: 'Numero invalido/fuera del area de cobertura.',
+      },
+    });
   }
   if (!termsAccepted || !contactAccepted) {
-    throw { status: 400, message: 'Debes aceptar terminos y contacto para continuar.' };
+    throw createSelfRegisterError(400, 'Debes aceptar terminos y contacto para continuar.', {
+      code: 'MISSING_CONSENTS',
+      fieldErrors: {
+        consents: 'Debes aceptar terminos y contacto para continuar.',
+      },
+    });
   }
   if (socialCount < 1) {
-    throw { status: 400, message: 'Debes informar al menos una red social o web.' };
+    throw createSelfRegisterError(400, 'Debes informar al menos una red social o web.', {
+      code: 'MISSING_SOCIAL',
+      fieldErrors: {
+        socialHandles: 'Debes confirmar al menos una red social o web.',
+      },
+    });
+  }
+
+  const duplicateByName = await prisma.shop.findFirst({
+    where: {
+      normalizedName,
+    },
+    select: { id: true },
+  });
+  if (duplicateByName) {
+    throw createSelfRegisterError(
+      409,
+      'Ya existe una tienda registrada con ese nombre comercial.',
+      {
+        code: 'DUPLICATE_STORE_NAME',
+        fieldErrors: {
+          storeName: 'Ese nombre comercial ya esta registrado.',
+        },
+      }
+    );
   }
 
   const duplicateByCuit = await prisma.shop.findFirst({
@@ -1185,26 +1443,72 @@ export const createSelfRegisteredShop = async (
     select: { id: true },
   });
   if (duplicateByCuit) {
-    throw {
-      status: 409,
-      message: 'Ya existe una tienda registrada con ese CUIT.',
-    };
+    throw createSelfRegisterError(409, 'Ya existe una tienda registrada con ese CUIT.', {
+      code: 'DUPLICATE_CUIT',
+      fieldErrors: {
+        cuit: 'Ese CUIT ya esta registrado.',
+      },
+    });
   }
 
   const duplicateByContact = await prisma.shop.findFirst({
     where: {
       OR: [
+        { email: { equals: email, mode: 'insensitive' } },
         { contactEmailPrivate: { equals: email, mode: 'insensitive' } },
         { contactWhatsappPrivate: { equals: whatsapp, mode: 'insensitive' } },
       ],
     },
-    select: { id: true },
+    select: {
+      email: true,
+      contactEmailPrivate: true,
+      contactWhatsappPrivate: true,
+    },
   });
   if (duplicateByContact) {
-    throw {
-      status: 409,
-      message: 'Ya existe una tienda registrada con ese email o WhatsApp.',
+    const normalizedDuplicateEmail = normalizeEmail(duplicateByContact.email);
+    const normalizedDuplicatePrivateEmail = normalizeEmail(duplicateByContact.contactEmailPrivate);
+    const normalizedDuplicateWhatsapp = normalizeArgentineMobileWhatsapp(
+      duplicateByContact.contactWhatsappPrivate
+    );
+    const emailDuplicated =
+      normalizedDuplicateEmail === email || normalizedDuplicatePrivateEmail === email;
+    const whatsappDuplicated = normalizedDuplicateWhatsapp === whatsapp;
+    const fieldErrors: SelfRegisterFieldErrors = {
+      ...(emailDuplicated ? { email: 'Ese email ya esta registrado.' } : {}),
+      ...(whatsappDuplicated ? { whatsapp: 'Ese WhatsApp ya esta registrado.' } : {}),
     };
+    const message = emailDuplicated && whatsappDuplicated
+      ? 'Ya existe una tienda registrada con ese email y WhatsApp.'
+      : emailDuplicated
+        ? 'Ya existe una tienda registrada con ese email.'
+        : 'Ya existe una tienda registrada con ese WhatsApp.';
+    throw createSelfRegisterError(409, message, {
+      code: 'DUPLICATE_CONTACT',
+      fieldErrors,
+      meta: {
+        emailDuplicated,
+        whatsappDuplicated,
+      },
+    });
+  }
+
+  const occupancy = await getAddressOccupancy(address.normalizedAddressBase);
+  if (occupancy.hasShops && !address.isGallery) {
+    const message = occupancy.hasGallery
+      ? 'Esta direccion figura como galeria. Presiona "¿es una galeria?" y completa el local.'
+      : 'Esta direccion ya tiene una tienda asignada. Si corresponde a una galeria, presiona "¿es una galeria?".';
+    throw createSelfRegisterError(409, message, {
+      code: 'ADDRESS_REQUIRES_GALLERY',
+      fieldErrors: {
+        address: message,
+      },
+      meta: {
+        showGalleryCta: true,
+        addressHasGallery: occupancy.hasGallery,
+        existingShopsCount: occupancy.count,
+      },
+    });
   }
 
   if (address.isGallery && address.galleryLocal) {
@@ -1216,10 +1520,16 @@ export const createSelfRegisteredShop = async (
       select: { id: true, name: true },
     });
     if (duplicateByAddressLocal) {
-      throw {
-        status: 409,
-        message: `Ya existe una tienda registrada en ese local (${address.galleryLocal}).`,
-      };
+      throw createSelfRegisterError(
+        409,
+        `Ya existe una tienda registrada en ese local (${address.galleryLocal}).`,
+        {
+          code: 'DUPLICATE_GALLERY_LOCAL',
+          fieldErrors: {
+            galleryLocal: `El local ${address.galleryLocal} ya esta ocupado.`,
+          },
+        }
+      );
     }
   }
 
@@ -1232,10 +1542,13 @@ export const createSelfRegisteredShop = async (
     select: { id: true },
   });
   if (duplicateByAddressAndName) {
-    throw {
-      status: 409,
-      message: 'Ya existe una tienda con ese nombre en esa direccion.',
-    };
+    throw createSelfRegisterError(409, 'Ya existe una tienda con ese nombre en esa direccion.', {
+      code: 'DUPLICATE_STORE_AT_ADDRESS',
+      fieldErrors: {
+        storeName: 'Ese nombre ya existe en esta direccion.',
+        address: 'Esta direccion ya tiene una tienda con ese nombre.',
+      },
+    });
   }
 
   const geocode = await geocodeAddressBase(address.addressBase);

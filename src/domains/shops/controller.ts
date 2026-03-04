@@ -257,6 +257,9 @@ export const selfRegisterShop = async (req: Request, res: Response) => {
     const status = Number(error?.status) || 500;
     res.status(status).json({
       message: error?.message || 'Error al registrar tienda.',
+      ...(error?.code ? { code: error.code } : {}),
+      ...(error?.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+      ...(error?.meta ? { meta: error.meta } : {}),
     });
   }
 };
@@ -266,13 +269,16 @@ export const validateSelfRegisterStep = async (req: Request, res: Response) => {
     const step = String(req.body?.step || '').trim();
     const payload =
       req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : req.body || {};
-    await ShopsService.validateSelfRegisterDraft(step, payload);
-    res.json({ ok: true });
+    const result = await ShopsService.validateSelfRegisterDraft(step, payload);
+    res.json(result);
   } catch (error: any) {
     const status = Number(error?.status) || 500;
     res.status(status).json({
       ok: false,
       message: error?.message || 'No se pudo validar este paso.',
+      ...(error?.code ? { code: error.code } : {}),
+      ...(error?.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+      ...(error?.meta ? { meta: error.meta } : {}),
     });
   }
 };

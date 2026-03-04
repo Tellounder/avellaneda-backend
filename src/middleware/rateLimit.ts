@@ -94,8 +94,13 @@ export const selfRegisterRateLimit = () => {
   const windowMs = Number(process.env.SELF_REGISTER_RATE_LIMIT_WINDOW_MS || 3_600_000);
   const maxRequests = Number(process.env.SELF_REGISTER_RATE_LIMIT_MAX || 10);
   const maxRequestsByIp = Number(process.env.SELF_REGISTER_RATE_LIMIT_IP_MAX || 80);
+  const enabledRaw = String(process.env.SELF_REGISTER_RATE_LIMIT_ENABLED ?? 'true')
+    .trim()
+    .toLowerCase();
+  const isEnabled = !['0', 'false', 'off', 'no'].includes(enabledRaw);
 
   return async (req: Request, res: Response, next: NextFunction) => {
+    if (!isEnabled) return next();
     if (req.method !== 'POST') return next();
     const clientKey = getClientKey(req);
     const identityKey = resolveSelfRegisterIdentity(req);

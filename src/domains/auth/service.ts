@@ -63,7 +63,8 @@ const buildContext = (input: {
   adminRole?: AdminRole;
 }): AuthContext => ({
   ...input,
-  requiresOnboarding: input.role === AuthRole.UNDEFINED,
+  requiresOnboarding:
+    input.role === AuthRole.UNDEFINED || input.role === AuthRole.PENDING_STORE,
 });
 
 const ensureClientProfile = async (authUserId: string) => {

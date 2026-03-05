@@ -1,4 +1,5 @@
 import {
+  AuthRole,
   AuthUserStatus,
   AuthUserType,
   NotificationType,
@@ -1936,6 +1937,7 @@ export const createShop = async (data: any) => {
           where: { id: reuseAuthUserId },
           data: {
             userType: AuthUserType.SHOP,
+            role: AuthRole.STORE,
             status: resolveAuthUserStatus(status, active),
           },
         })
@@ -1944,6 +1946,7 @@ export const createShop = async (data: any) => {
             email: authEmail,
             passwordHash,
             userType: AuthUserType.SHOP,
+            role: AuthRole.STORE,
             status: resolveAuthUserStatus(status, active),
           },
         });
@@ -2367,7 +2370,7 @@ export const assignOwner = async (shopId: string, payload: { authUserId?: string
   return prisma.$transaction(async (tx) => {
     await tx.authUser.update({
       where: { id: authUser.id },
-      data: { userType: AuthUserType.SHOP },
+      data: { userType: AuthUserType.SHOP, role: AuthRole.STORE },
     });
 
     const updatedShop = await tx.shop.update({

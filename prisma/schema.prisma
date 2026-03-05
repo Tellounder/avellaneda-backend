@@ -21,6 +21,15 @@ enum AuthUserType {
   ADMIN
 }
 
+enum AuthRole {
+  UNDEFINED
+  USER
+  PENDING_STORE
+  STORE
+  ADMIN
+  SUPERADMIN
+}
+
 enum AuthUserStatus {
   ACTIVE
   SUSPENDED
@@ -210,11 +219,14 @@ enum ChatMessageType {
 model AuthUser {
   id           String          @id @default(uuid())
   email        String          @unique
+  firebaseUid  String?         @unique
   passwordHash String?
   userType     AuthUserType
+  role         AuthRole        @default(UNDEFINED)
   status       AuthUserStatus  @default(ACTIVE)
   createdAt    DateTime        @default(now())
   lastLoginAt  DateTime?
+  onboardingCompletedAt DateTime?
 
   shop         Shop?
   admin        Admin?
@@ -229,6 +241,8 @@ model AuthUser {
   chatClientConversations ChatConversation[] @relation("ChatClientAuthUser")
   chatSentMessages ChatMessage[] @relation("ChatMessageSender")
   chatReadStates ChatConversationRead[] @relation("ChatReadAuthUser")
+
+  @@index([role])
 }
 
 model Admin {

@@ -19,6 +19,13 @@ const gcsPublicBaseUrl = String(process.env.GCS_PUBLIC_BASE_URL || '')
 const reelsBucket = gcsReelsBucket;
 const TARGET_WIDTH = 720;
 const TARGET_HEIGHT = 1280;
+const TARGET_ASPECT = TARGET_WIDTH / TARGET_HEIGHT;
+const OVERLAY_SUPERSAMPLE = Math.max(
+  1,
+  Math.min(3, Number(process.env.REEL_OVERLAY_SUPERSAMPLE || 2))
+);
+const OVERLAY_WIDTH = TARGET_WIDTH * OVERLAY_SUPERSAMPLE;
+const OVERLAY_HEIGHT = TARGET_HEIGHT * OVERLAY_SUPERSAMPLE;
 const MANROPE_FONT_PATH = path.resolve(process.cwd(), 'assets', 'fonts', 'Manrope.ttf');
 const FFMPEG_THREADS = Math.max(
   1,
@@ -36,29 +43,128 @@ const MAX_SOURCE_VIDEO_SECONDS = Math.max(
   5,
   Number(process.env.REEL_MAX_SOURCE_VIDEO_SECONDS || 17)
 );
+export const REEL_RENDER_PROFILE_VERSION = 'reels-render-v3-p2';
+const PHOTO_ENCODE_PROFILE = Object.freeze({
+  codec: 'mjpeg',
+  qualityQv: 2,
+  pixFmt: 'yuvj444p',
+});
+const VIDEO_ENCODE_PROFILE = Object.freeze({
+  codec: 'libx264',
+  preset: 'veryfast',
+  profile: 'high',
+  level: '4.0',
+  crf: 23,
+  fps: 30,
+  maxrate: '3200k',
+  bufsize: '6400k',
+  gop: 60,
+  pixFmt: 'yuv420p',
+  audioCodec: 'aac',
+  audioBitrate: '128k',
+});
 let manropeFontBase64: string | null = null;
 let manropePathLogged = false;
 
-const resolveEditorSpec = (editorState: any) => {
+type RenderDiagnostics = {
+  profileVersion: string;
+  kind: 'PHOTO' | 'VIDEO';
+  filterHash: string;
+  normalization: Record<string, any>;
+  encode: Record<string, any>;
+  source: Record<string, any>;
+  output?: Record<string, any>;
+  overlay: {
+    hasOverlay: boolean;
+    source: 'downloaded' | 'generated' | 'none';
+  };
+};
+
+type ResolvedEditorSpec = {
+  width: number;
+  height: number;
+  frameWidth: number;
+  frameHeight: number;
+  frameOffsetX: number;
+  frameOffsetY: number;
+  aspect: number;
+  usesLetterbox: boolean;
+};
+
+const resolveEditorSpec = (editorState: any): ResolvedEditorSpec | null => {
   const spec = editorState?.spec;
   const width = Number(spec?.width);
   const height = Number(spec?.height);
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return null;
   }
-  return { width, height };
+  const aspect = width / height;
+  const aspectDelta = Math.abs(aspect - TARGET_ASPECT);
+  if (aspectDelta < 0.0005) {
+    return {
+      width,
+      height,
+      frameWidth: width,
+      frameHeight: height,
+      frameOffsetX: 0,
+      frameOffsetY: 0,
+      aspect,
+      usesLetterbox: false,
+    };
+  }
+  if (aspect > TARGET_ASPECT) {
+    const frameHeight = height;
+    const frameWidth = frameHeight * TARGET_ASPECT;
+    return {
+      width,
+      height,
+      frameWidth,
+      frameHeight,
+      frameOffsetX: (width - frameWidth) / 2,
+      frameOffsetY: 0,
+      aspect,
+      usesLetterbox: true,
+    };
+  }
+  const frameWidth = width;
+  const frameHeight = frameWidth / TARGET_ASPECT;
+  return {
+    width,
+    height,
+    frameWidth,
+    frameHeight,
+    frameOffsetX: 0,
+    frameOffsetY: (height - frameHeight) / 2,
+    aspect,
+    usesLetterbox: true,
+  };
 };
 
-const normalizeFromSpec = (value: number, specValue: number | undefined) => {
+const normalizeDimensionFromSpec = (value: number, specValue: number | undefined) => {
   if (!Number.isFinite(value)) return 0;
   if (!specValue || !Number.isFinite(specValue) || specValue <= 0) return value;
   return value / specValue;
 };
 
-const scaleFromSpec = (value: number, spec: { width: number; height: number } | null) => {
+const normalizeFromSpec = (
+  value: number,
+  spec: ResolvedEditorSpec | null,
+  axis: 'x' | 'y'
+) => {
+  if (!Number.isFinite(value)) return 0;
+  // Compatibilidad: algunos clients ya envian valores normalizados.
+  if (Math.abs(value) <= 1.5) return value;
+  if (!spec) return value;
+  const size = axis === 'x' ? spec.frameWidth : spec.frameHeight;
+  const offset = axis === 'x' ? spec.frameOffsetX : spec.frameOffsetY;
+  if (!Number.isFinite(size) || size <= 0) return value;
+  return (value - offset) / size;
+};
+
+const scaleFromSpec = (value: number, spec: ResolvedEditorSpec | null) => {
   if (!Number.isFinite(value)) return 0;
   if (!spec) return value;
-  const ratio = TARGET_WIDTH / spec.width;
+  const ratio = TARGET_WIDTH / spec.frameWidth;
   return value * ratio;
 };
 
@@ -78,7 +184,7 @@ const resolveBaseline = (anchorY?: number) => {
 
 const resolveCropRect = (
   transform: any,
-  spec: { width: number; height: number } | null
+  spec: ResolvedEditorSpec | null
 ) => {
   const crop = transform?.crop;
   if (!crop) return null;
@@ -94,10 +200,14 @@ const resolveCropRect = (
     rawHeight <= 1 &&
     Math.abs(rawX) <= 1.5 &&
     Math.abs(rawY) <= 1.5;
-  const widthNorm = normalized ? rawWidth : normalizeFromSpec(rawWidth, spec?.width);
-  const heightNorm = normalized ? rawHeight : normalizeFromSpec(rawHeight, spec?.height);
-  const xNorm = normalized ? rawX : normalizeFromSpec(rawX, spec?.width);
-  const yNorm = normalized ? rawY : normalizeFromSpec(rawY, spec?.height);
+  const widthNorm = normalized
+    ? rawWidth
+    : normalizeDimensionFromSpec(rawWidth, spec?.frameWidth);
+  const heightNorm = normalized
+    ? rawHeight
+    : normalizeDimensionFromSpec(rawHeight, spec?.frameHeight);
+  const xNorm = normalized ? rawX : normalizeFromSpec(rawX, spec, 'x');
+  const yNorm = normalized ? rawY : normalizeFromSpec(rawY, spec, 'y');
   const clampedW = clampNumber(widthNorm, 0.05, 1, 1);
   const clampedH = clampNumber(heightNorm, 0.05, 1, 1);
   const clampedX = clampNumber(xNorm, 0, 1 - clampedW, 0);
@@ -128,9 +238,18 @@ const normalizeHexColor = (value: unknown, fallback = '0x0f172a') => {
 };
 
 const resolveMediaBackground = (editorState: any) => {
-  const mode = editorState?.mediaBackground?.mode === 'color' ? 'color' : 'blur';
+  const rawMode = String(editorState?.mediaBackground?.mode || '')
+    .trim()
+    .toLowerCase();
+  const mode =
+    rawMode === 'color' || rawMode === 'solid'
+      ? 'color'
+      : rawMode === 'blur' || rawMode === 'glass'
+        ? 'blur'
+        : 'blur';
   const color = normalizeHexColor(editorState?.mediaBackground?.color, '0x334155');
-  return { mode, color };
+  const source = rawMode || 'default-blur';
+  return { mode, color, source };
 };
 
 const assertStorageConfigured = () => {
@@ -185,21 +304,42 @@ const ensureFfmpeg = () => {
   ffmpeg.setFfmpegPath(ffmpegPath);
 };
 
-const readVideoDurationSeconds = async (sourcePath: string): Promise<number> =>
-  new Promise<number>((resolve, reject) => {
-    ffmpeg.ffprobe(sourcePath, (error: unknown, data: any) => {
-      if (error) {
-        reject(error instanceof Error ? error : new Error('No se pudo inspeccionar el video.'));
-        return;
-      }
+const hashFilterGraph = (filter: string) =>
+  crypto.createHash('sha1').update(filter).digest('hex').slice(0, 12);
+
+const readVideoProbe = async (
+  sourcePath: string
+): Promise<{ durationSec: number; width: number | null; height: number | null }> =>
+  new Promise<{ durationSec: number; width: number | null; height: number | null }>(
+    (resolve, reject) => {
+      ffmpeg.ffprobe(sourcePath, (error: unknown, data: any) => {
+        if (error) {
+          reject(error instanceof Error ? error : new Error('No se pudo inspeccionar el video.'));
+          return;
+        }
       const duration = Number(data?.format?.duration || 0);
       if (!Number.isFinite(duration) || duration <= 0) {
         reject(new Error('No se pudo determinar la duracion del video.'));
         return;
       }
-      resolve(duration);
-    });
-  });
+      const videoStream = Array.isArray(data?.streams)
+        ? data.streams.find((stream: any) => stream?.codec_type === 'video')
+        : null;
+      const width = Number(videoStream?.width);
+      const height = Number(videoStream?.height);
+        resolve({
+          durationSec: duration,
+          width: Number.isFinite(width) && width > 0 ? width : null,
+          height: Number.isFinite(height) && height > 0 ? height : null,
+        });
+      });
+    }
+  );
+
+const readVideoDurationSeconds = async (sourcePath: string): Promise<number> => {
+  const probe = await readVideoProbe(sourcePath);
+  return probe.durationSec;
+};
 
 const runFfmpegCommand = async ({
   command,
@@ -379,15 +519,21 @@ const buildStickerOverlay = async (editorState: any, tempDir: string) => {
 
   const elements = stickers.map((sticker: any) => {
     const rawText = String(sticker?.text || '').trim();
-    const normalizedX = normalizeFromSpec(Number(sticker.x), spec?.width);
-    const normalizedY = normalizeFromSpec(Number(sticker.y), spec?.height);
-    const x = Math.round(clampNumber(normalizedX, -2, 2, 0) * TARGET_WIDTH);
-    const y = Math.round(clampNumber(normalizedY, -2, 2, 0) * TARGET_HEIGHT);
+    const normalizedX = normalizeFromSpec(Number(sticker.x), spec, 'x');
+    const normalizedY = normalizeFromSpec(Number(sticker.y), spec, 'y');
+    const x = Math.round(clampNumber(normalizedX, -2, 2, 0) * OVERLAY_WIDTH);
+    const y = Math.round(clampNumber(normalizedY, -2, 2, 0) * OVERLAY_HEIGHT);
     const scale = clampNumber(Number(sticker.scale ?? 1), 0.5, 3, 1);
     const baseFontSize = Number(sticker.fontSize ?? 42);
     const baseLineHeight = Number(sticker.lineHeight ?? baseFontSize * 1.25);
-    const fontSize = Math.max(10, Math.round(scaleFromSpec(baseFontSize, spec) * scale));
-    const lineHeight = Math.max(10, Math.round(scaleFromSpec(baseLineHeight, spec) * scale));
+    const fontSize = Math.max(
+      10,
+      Math.round(scaleFromSpec(baseFontSize, spec) * scale * OVERLAY_SUPERSAMPLE)
+    );
+    const lineHeight = Math.max(
+      10,
+      Math.round(scaleFromSpec(baseLineHeight, spec) * scale * OVERLAY_SUPERSAMPLE)
+    );
     const color = String(sticker.color || '#ffffff');
     const rotation = clampNumber(Number(sticker.rotation ?? 0), -180, 180, 0);
     const fontFamily = 'Manrope';
@@ -406,7 +552,7 @@ const buildStickerOverlay = async (editorState: any, tempDir: string) => {
   });
 
   const svg = `
-<svg xmlns="http://www.w3.org/2000/svg" width="${TARGET_WIDTH}" height="${TARGET_HEIGHT}" viewBox="0 0 ${TARGET_WIDTH} ${TARGET_HEIGHT}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${OVERLAY_WIDTH}" height="${OVERLAY_HEIGHT}" viewBox="0 0 ${OVERLAY_WIDTH} ${OVERLAY_HEIGHT}">
   ${fontFace}
   ${elements.join('\n')}
 </svg>`;
@@ -423,51 +569,88 @@ const buildEditorFilter = (editorState: any, mediaIndex = 0, withOverlay = false
   const fitMode = transform?.fit || editorState?.fit || 'contain';
   const cropRect = resolveCropRect(transform, spec);
   const background = resolveMediaBackground(editorState);
+  const normalizationMeta = spec
+    ? {
+        source: 'editor-spec',
+        usesLetterbox: spec.usesLetterbox,
+        inputWidth: spec.width,
+        inputHeight: spec.height,
+        frameWidth: Math.round(spec.frameWidth),
+        frameHeight: Math.round(spec.frameHeight),
+        frameOffsetX: Math.round(spec.frameOffsetX),
+        frameOffsetY: Math.round(spec.frameOffsetY),
+        inputAspect: Number(spec.aspect.toFixed(6)),
+      }
+    : {
+        source: 'default-target',
+        usesLetterbox: false,
+        inputWidth: TARGET_WIDTH,
+        inputHeight: TARGET_HEIGHT,
+        frameWidth: TARGET_WIDTH,
+        frameHeight: TARGET_HEIGHT,
+        frameOffsetX: 0,
+        frameOffsetY: 0,
+        inputAspect: Number(TARGET_ASPECT.toFixed(6)),
+      };
   const filterParts: string[] = [];
 
   if (background.mode === 'color') {
-    filterParts.push(`color=c=${background.color}:s=${TARGET_WIDTH}x${TARGET_HEIGHT}[bg]`);
+    filterParts.push(`color=c=${background.color}:s=${TARGET_WIDTH}x${TARGET_HEIGHT}:d=1,format=rgba[bg]`);
   } else {
     filterParts.push(
-      `[0:v]scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=increase,crop=${TARGET_WIDTH}:${TARGET_HEIGHT},boxblur=24:8,eq=saturation=0.9:brightness=0.78[bg_blur]`
+      `[0:v]scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos,crop=${TARGET_WIDTH}:${TARGET_HEIGHT},boxblur=24:8,eq=saturation=0.9:brightness=0.78,format=rgba[bg_blur]`
     );
     filterParts.push(`[bg_blur]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.42:t=fill[bg]`);
   }
 
   let baseFilter =
     fitMode === 'cover'
-      ? `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=increase,crop=${TARGET_WIDTH}:${TARGET_HEIGHT},setsar=1`
-      : `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease,setsar=1`;
+      ? `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=increase:flags=lanczos,crop=${TARGET_WIDTH}:${TARGET_HEIGHT},setsar=1`
+      : `scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos,setsar=1`;
   if (cropRect) {
     baseFilter += `,crop=${cropRect.width}:${cropRect.height}:${cropRect.x}:${cropRect.y},scale=${TARGET_WIDTH}:${TARGET_HEIGHT}`;
   }
-  filterParts.push(`[0:v]${baseFilter}[base]`);
+  filterParts.push(`[0:v]${baseFilter},format=rgba[base]`);
   const baseLabel = 'base';
 
   const scale = clampNumber(Number(transform?.scale ?? 1), 0.2, 4, 1);
   const rotationRad = ((Number(transform?.rotation) || 0) * Math.PI) / 180;
-  const normalizedX = normalizeFromSpec(Number(transform?.x), spec?.width);
-  const normalizedY = normalizeFromSpec(Number(transform?.y), spec?.height);
+  const normalizedX = normalizeFromSpec(Number(transform?.x), spec, 'x');
+  const normalizedY = normalizeFromSpec(Number(transform?.y), spec, 'y');
   const offsetX = Math.round(normalizedX * TARGET_WIDTH);
   const offsetY = Math.round(normalizedY * TARGET_HEIGHT);
   const overlayX = `(W-w)/2+${offsetX}`;
   const overlayY = `(H-h)/2+${offsetY}`;
   const scaleFactor = Number.isFinite(scale) ? scale.toFixed(6) : '1.000000';
+  const rotationValue = Number.isFinite(rotationRad) ? rotationRad.toFixed(9) : '0.000000000';
 
   filterParts.push(
-    `[${baseLabel}]format=rgba,scale=iw*${scaleFactor}:ih*${scaleFactor},rotate=${rotationRad}:fillcolor=0x00000000[scaled]`
+    `[${baseLabel}]scale=iw*${scaleFactor}:ih*${scaleFactor}:flags=lanczos,rotate=${rotationValue}:ow=rotw(iw):oh=roth(ih):fillcolor=0x00000000[scaled]`
   );
-  filterParts.push(`[bg][scaled]overlay=${overlayX}:${overlayY}:format=auto[v0]`);
+  filterParts.push(`[bg][scaled]overlay=${overlayX}:${overlayY}:format=auto:shortest=1[v0]`);
 
   let currentLabel = 'v0';
   if (withOverlay) {
-    filterParts.push(`[${currentLabel}][1:v]overlay=0:0:format=auto[v1]`);
+    filterParts.push(
+      `[1:v]format=rgba,scale=${TARGET_WIDTH}:${TARGET_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${TARGET_WIDTH}:${TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=0x00000000[editor_overlay]`
+    );
+    filterParts.push(
+      `[${currentLabel}][editor_overlay]overlay=0:0:format=auto:shortest=1[v1]`
+    );
     currentLabel = 'v1';
   }
 
-  filterParts.push(`[${currentLabel}]crop=${TARGET_WIDTH}:${TARGET_HEIGHT}:0:0[vout]`);
+  filterParts.push(`[${currentLabel}]crop=${TARGET_WIDTH}:${TARGET_HEIGHT}:0:0,format=rgb24[vout]`);
 
-  return { filter: filterParts.join(';'), outputLabel: 'vout' };
+  return {
+    filter: filterParts.join(';'),
+    outputLabel: 'vout',
+    normalizationMeta: {
+      ...normalizationMeta,
+      backgroundMode: background.mode,
+      backgroundSource: background.source,
+    },
+  };
 };
 
 const processPhotoSet = async (
@@ -493,7 +676,8 @@ export const processPhotoFromPath = async (
   editorState?: any,
   mediaIndex = 0,
   timeoutMs = FFMPEG_TIMEOUT_MS,
-  providedOverlayPath?: string | null
+  providedOverlayPath?: string | null,
+  onRenderDiagnostics?: (meta: RenderDiagnostics) => void
 ) => {
   ensureFfmpeg();
   await fs.mkdir(tempDir, { recursive: true });
@@ -501,9 +685,32 @@ export const processPhotoFromPath = async (
   if (!stat.isFile() || stat.size === 0) {
     throw new Error(`Archivo fuente invalido o vacio: ${sourcePath}`);
   }
+  const startedAt = Date.now();
   const outputName = `reel-photo-${mediaIndex}.jpg`;
   const overlayPath = providedOverlayPath || (await buildStickerOverlay(editorState, tempDir));
-  const { filter, outputLabel } = buildEditorFilter(editorState, mediaIndex, Boolean(overlayPath));
+  const overlaySource: RenderDiagnostics['overlay']['source'] = providedOverlayPath
+    ? 'downloaded'
+    : overlayPath
+      ? 'generated'
+      : 'none';
+  const { filter, outputLabel, normalizationMeta } = buildEditorFilter(
+    editorState,
+    mediaIndex,
+    Boolean(overlayPath)
+  );
+  const filterHash = hashFilterGraph(filter);
+  const sourceImageMeta = await sharp(sourcePath)
+    .metadata()
+    .then((meta) => ({
+      width: Number(meta.width) || null,
+      height: Number(meta.height) || null,
+    }))
+    .catch(() => ({ width: null, height: null }));
+  if (normalizationMeta.usesLetterbox) {
+    console.log(
+      `[reels-render] Stage normalization photo media=${mediaIndex} source=${normalizationMeta.source} input=${normalizationMeta.inputWidth}x${normalizationMeta.inputHeight} frame=${normalizationMeta.frameWidth}x${normalizationMeta.frameHeight} offset=${normalizationMeta.frameOffsetX},${normalizationMeta.frameOffsetY}`
+    );
+  }
 
   const outputPath = path.join(tempDir, outputName);
   const stderr: string[] = [];
@@ -520,9 +727,10 @@ export const processPhotoFromPath = async (
       '-frames:v',
       '1',
       '-q:v',
-      '4',
-      '-update',
-      '1',
+      '2',
+      '-pix_fmt',
+      'yuvj444p',
+      '-an',
       '-y',
     ])
     .output(outputPath);
@@ -547,6 +755,33 @@ export const processPhotoFromPath = async (
     const details = stderr.length ? `\nffmpeg:\n${stderr.join('\n')}` : '';
     throw new Error(`No se pudo renderizar la imagen del reel (sin salida).${details}`);
   }
+  const elapsedMs = Date.now() - startedAt;
+  onRenderDiagnostics?.({
+    profileVersion: REEL_RENDER_PROFILE_VERSION,
+    kind: 'PHOTO',
+    filterHash,
+    normalization: normalizationMeta,
+    encode: { ...PHOTO_ENCODE_PROFILE },
+    source: {
+      path: sourcePath,
+      sizeBytes: stat.size,
+      ...sourceImageMeta,
+      mediaIndex,
+    },
+    output: {
+      width: TARGET_WIDTH,
+      height: TARGET_HEIGHT,
+      sizeBytes: buffer.length,
+      elapsedMs,
+    },
+    overlay: {
+      hasOverlay: Boolean(overlayPath),
+      source: overlaySource,
+    },
+  });
+  console.log(
+    `[reels-render] photo done shop=${shopId} media=${mediaIndex} hash=${filterHash} bytes=${buffer.length} ms=${elapsedMs} overlay=${overlaySource}`
+  );
 
   return uploadBuffer(buildKey(shopId, outputName), buffer, 'image/jpeg');
 };
@@ -558,10 +793,12 @@ export const processVideoFromPath = async (
   editorState?: any,
   onProgress?: (progress: number) => void,
   timeoutMs = FFMPEG_TIMEOUT_MS,
-  providedOverlayPath?: string | null
+  providedOverlayPath?: string | null,
+  onRenderDiagnostics?: (meta: RenderDiagnostics) => void
 ) => {
   ensureFfmpeg();
   await fs.mkdir(tempDir, { recursive: true });
+  const startedAt = Date.now();
   const sourceStat = await fs.stat(sourcePath);
   if (!sourceStat.isFile() || sourceStat.size === 0) {
     throw new Error(`Archivo fuente invalido o vacio: ${sourcePath}`);
@@ -572,7 +809,8 @@ export const processVideoFromPath = async (
       `Video demasiado pesado (${sourceSizeMb.toFixed(1)}MB). Maximo permitido: ${MAX_SOURCE_VIDEO_MB}MB.`
     );
   }
-  const sourceDurationSeconds = await readVideoDurationSeconds(sourcePath);
+  const videoProbe = await readVideoProbe(sourcePath);
+  const sourceDurationSeconds = videoProbe.durationSec;
   const trimWindow = resolveVideoTrimWindow(editorState, sourceDurationSeconds);
   if (!trimWindow && sourceDurationSeconds > MAX_SOURCE_VIDEO_SECONDS) {
     throw new Error(
@@ -582,7 +820,22 @@ export const processVideoFromPath = async (
   const videoOutput = path.join(tempDir, 'out.mp4');
   const thumbOutput = path.join(tempDir, 'out-thumb.jpg');
   const overlayPath = providedOverlayPath || (await buildStickerOverlay(editorState, tempDir));
-  const { filter, outputLabel } = buildEditorFilter(editorState, 0, Boolean(overlayPath));
+  const overlaySource: RenderDiagnostics['overlay']['source'] = providedOverlayPath
+    ? 'downloaded'
+    : overlayPath
+      ? 'generated'
+      : 'none';
+  const { filter, outputLabel, normalizationMeta } = buildEditorFilter(
+    editorState,
+    0,
+    Boolean(overlayPath)
+  );
+  const filterHash = hashFilterGraph(filter);
+  if (normalizationMeta.usesLetterbox) {
+    console.log(
+      `[reels-render] Stage normalization video source=${normalizationMeta.source} input=${normalizationMeta.inputWidth}x${normalizationMeta.inputHeight} frame=${normalizationMeta.frameWidth}x${normalizationMeta.frameHeight} offset=${normalizationMeta.frameOffsetX},${normalizationMeta.frameOffsetY}`
+    );
+  }
 
   const renderCommand = ffmpeg(sourcePath);
   if (trimWindow) {
@@ -605,14 +858,18 @@ export const processVideoFromPath = async (
       String(FFMPEG_THREADS),
       '-preset',
       'veryfast',
+      '-profile:v',
+      'high',
+      '-level:v',
+      '4.0',
       '-crf',
-      '28',
+      '23',
       '-r',
       '30',
       '-maxrate',
-      '1800k',
+      '3200k',
       '-bufsize',
-      '3600k',
+      '6400k',
       '-g',
       '60',
       '-movflags',
@@ -698,6 +955,36 @@ export const processVideoFromPath = async (
     buildKey(shopId, 'reel-thumb.jpg'),
     thumbOutput,
     'image/jpeg'
+  );
+  const elapsedMs = Date.now() - startedAt;
+  onRenderDiagnostics?.({
+    profileVersion: REEL_RENDER_PROFILE_VERSION,
+    kind: 'VIDEO',
+    filterHash,
+    normalization: normalizationMeta,
+    encode: { ...VIDEO_ENCODE_PROFILE },
+    source: {
+      path: sourcePath,
+      sizeBytes: sourceStat.size,
+      durationSec: Number(sourceDurationSeconds.toFixed(3)),
+      width: videoProbe.width,
+      height: videoProbe.height,
+      trimWindow: trimWindow || null,
+    },
+    output: {
+      width: TARGET_WIDTH,
+      height: TARGET_HEIGHT,
+      sizeBytes: videoStat.size,
+      thumbnailSizeBytes: thumbStat.size,
+      elapsedMs,
+    },
+    overlay: {
+      hasOverlay: Boolean(overlayPath),
+      source: overlaySource,
+    },
+  });
+  console.log(
+    `[reels-render] video done shop=${shopId} hash=${filterHash} bytes=${videoStat.size} thumbBytes=${thumbStat.size} ms=${elapsedMs} overlay=${overlaySource}`
   );
 
   return { videoUrl, thumbnailUrl };

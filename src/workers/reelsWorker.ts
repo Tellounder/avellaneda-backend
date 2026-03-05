@@ -9,7 +9,11 @@ import path from 'path';
 import { pipeline } from 'stream/promises';
 import { ReelStatus, ReelType } from '@prisma/client';
 import prisma from '../../prisma/client';
-import { processPhotoFromPath, processVideoFromPath } from '../services/reelsMedia.service';
+import {
+  REEL_RENDER_PROFILE_VERSION,
+  processPhotoFromPath,
+  processVideoFromPath
+} from '../services/reelsMedia.service';
 
 const BATCH_SIZE = Math.max(1, Number(process.env.REEL_WORKER_BATCH || 3));
 const INTERVAL_MS = Math.max(15_000, Number(process.env.REEL_WORKER_INTERVAL_MS || 60_000));
@@ -139,6 +143,16 @@ const readRenderOverlayUrl = (editorState: any) => {
   const nested = String(editorState?.renderOverlay?.url || '').trim();
   if (nested) return nested;
   return null;
+};
+
+const toErrorString = (error: unknown) => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'Error no serializable';
+  }
 };
 
 const releaseStaleLocks = async () => {
@@ -281,6 +295,18 @@ const processReel = async (reel: {
 
   let tempDir = '';
   const progressState = { last: -1, lastAt: 0 };
+  const overlaySourceUrl = readRenderOverlayUrl(baseEditorState);
+  const overlayDiagnostics = {
+    sourceUrl: overlaySourceUrl,
+    status: overlaySourceUrl ? 'REQUESTED' : 'NOT_PROVIDED',
+    bytes: 0,
+    error: null as string | null,
+  };
+  const renderDiagnostics = {
+    profileVersion: REEL_RENDER_PROFILE_VERSION,
+    photoRenders: [] as Record<string, any>[],
+    videoRender: null as Record<string, any> | null,
+  };
 
   const reportProgress = async (value: number, stage = 'PROCESSING') => {
     const next = Math.max(0, Math.min(100, Math.round(value)));
@@ -303,11 +329,13 @@ const processReel = async (reel: {
   };
   try {
     tempDir = await createTempDir();
-    const overlaySourceUrl = readRenderOverlayUrl(baseEditorState);
     let downloadedOverlayPath: string | null = null;
     if (overlaySourceUrl) {
       const overlayExt = getExtensionFromUrl(overlaySourceUrl) || '.png';
       const overlayPath = path.join(tempDir, `source-overlay${overlayExt}`);
+      console.log(
+        `[reels-worker] Overlay download start reel=${reel.id} job=${jobId} url=${overlaySourceUrl}`
+      );
       try {
         await withTimeout(
           downloadToFile(overlaySourceUrl, overlayPath),
@@ -317,10 +345,23 @@ const processReel = async (reel: {
         const overlayStat = await fsPromises.stat(overlayPath);
         if (overlayStat.isFile() && overlayStat.size > 0) {
           downloadedOverlayPath = overlayPath;
+          overlayDiagnostics.status = 'DOWNLOADED';
+          overlayDiagnostics.bytes = overlayStat.size;
+          console.log(
+            `[reels-worker] Overlay download OK reel=${reel.id} job=${jobId} bytes=${overlayStat.size}`
+          );
+        } else {
+          overlayDiagnostics.status = 'EMPTY_FILE';
+          overlayDiagnostics.error = 'Overlay descargado sin bytes';
+          console.warn(
+            `[reels-worker] Overlay vacio reel=${reel.id} job=${jobId}. Se usa fallback interno.`
+          );
         }
       } catch (overlayError) {
+        overlayDiagnostics.status = 'DOWNLOAD_FAILED';
+        overlayDiagnostics.error = toErrorString(overlayError).slice(0, 300);
         console.warn(
-          `[reels-worker] Overlay opcional no disponible para reel ${reel.id}:`,
+          `[reels-worker] Overlay opcional no disponible para reel=${reel.id} job=${jobId}. Se usa fallback interno.`,
           overlayError
         );
       }
@@ -352,7 +393,10 @@ const processReel = async (reel: {
           void reportProgress(percent, 'RENDER_VIDEO');
         },
         PROCESS_TIMEOUT_MS,
-        downloadedOverlayPath
+        downloadedOverlayPath,
+        (meta) => {
+          renderDiagnostics.videoRender = meta;
+        }
       );
       nextVideoUrl = videoUrl;
       nextThumbUrl = thumbnailUrl;
@@ -381,7 +425,10 @@ const processReel = async (reel: {
           reel.editorState,
           index,
           PROCESS_TIMEOUT_MS,
-          downloadedOverlayPath
+          downloadedOverlayPath,
+          (meta) => {
+            renderDiagnostics.photoRenders.push(meta);
+          }
         );
         nextPhotoUrls.push(processedUrl);
         await reportProgress(((index + 1) / totalPhotos) * 100, 'RENDER_PHOTO_SET');
@@ -396,6 +443,12 @@ const processReel = async (reel: {
       workerJobId: jobId,
       workerLockedAt: new Date().toISOString(),
       workerError: null,
+      workerOverlaySourceUrl: overlayDiagnostics.sourceUrl,
+      workerOverlayStatus: overlayDiagnostics.status,
+      workerOverlayBytes: overlayDiagnostics.bytes,
+      workerOverlayError: overlayDiagnostics.error,
+      workerRenderProfile: REEL_RENDER_PROFILE_VERSION,
+      workerRenderDiagnostics: renderDiagnostics,
     });
     const activated = await prisma.reel.updateMany({
       where: { id: reel.id, processingJobId: jobId },
@@ -429,6 +482,12 @@ const processReel = async (reel: {
       workerFailedAt: new Date().toISOString(),
       workerError: message,
       processingRetries: retries,
+      workerOverlaySourceUrl: overlayDiagnostics.sourceUrl,
+      workerOverlayStatus: overlayDiagnostics.status,
+      workerOverlayBytes: overlayDiagnostics.bytes,
+      workerOverlayError: overlayDiagnostics.error,
+      workerRenderProfile: REEL_RENDER_PROFILE_VERSION,
+      workerRenderDiagnostics: renderDiagnostics,
     });
     const released = await prisma.reel.updateMany({
       where: { id: reel.id, processingJobId: jobId },

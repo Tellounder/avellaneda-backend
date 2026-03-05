@@ -1,4 +1,4 @@
-import { AdminRole, AuthRole, AuthUserStatus, AuthUserType } from '@prisma/client';
+import { AdminRole, AuthRole, AuthUserStatus, AuthUserType, ShopStatus } from '@prisma/client';
 import prisma from './repo';
 import { firebaseAuth } from '../../lib/firebaseAdmin';
 import { resolveAppUrl, sendEmailTemplate } from '../../services/email.service';
@@ -17,6 +17,12 @@ export type AuthContext = {
   shopId?: string;
   adminRole?: AdminRole;
   requiresOnboarding?: boolean;
+  nextAction?:
+    | 'OPEN_ROLE_ONBOARDING'
+    | 'OPEN_STORE_ONBOARDING'
+    | 'GO_ADMIN_DASHBOARD'
+    | 'GO_STORE_DASHBOARD'
+    | 'GO_PUBLIC_HOME';
 };
 
 export type OnboardingIntent = 'USER' | 'STORE';
@@ -52,6 +58,24 @@ const ADMIN_EMAILS = new Set(
 const toAuthRoleFromAdmin = (adminRole: AdminRole | undefined | null): AuthRole =>
   adminRole === AdminRole.SUPERADMIN ? AuthRole.SUPERADMIN : AuthRole.ADMIN;
 
+const isAdminRole = (role: AuthRole) => role === AuthRole.ADMIN || role === AuthRole.SUPERADMIN;
+const isStoreRole = (role: AuthRole) => role === AuthRole.STORE;
+const requiresOnboardingByRole = (role: AuthRole) =>
+  role === AuthRole.UNDEFINED || role === AuthRole.PENDING_STORE;
+const isStoreRoleEligibleByShopState = (shop: { status: ShopStatus; active: boolean }) => {
+  if (shop.active === false) return false;
+  if (shop.status === ShopStatus.BANNED || shop.status === ShopStatus.HIDDEN) return false;
+  if (shop.status === ShopStatus.PENDING_VERIFICATION) return false;
+  return true;
+};
+const resolveNextAction = (role: AuthRole): AuthContext['nextAction'] => {
+  if (role === AuthRole.UNDEFINED) return 'OPEN_ROLE_ONBOARDING';
+  if (role === AuthRole.PENDING_STORE) return 'OPEN_STORE_ONBOARDING';
+  if (isAdminRole(role)) return 'GO_ADMIN_DASHBOARD';
+  if (isStoreRole(role)) return 'GO_STORE_DASHBOARD';
+  return 'GO_PUBLIC_HOME';
+};
+
 const buildContext = (input: {
   uid: string;
   email: string;
@@ -63,8 +87,8 @@ const buildContext = (input: {
   adminRole?: AdminRole;
 }): AuthContext => ({
   ...input,
-  requiresOnboarding:
-    input.role === AuthRole.UNDEFINED || input.role === AuthRole.PENDING_STORE,
+  requiresOnboarding: requiresOnboardingByRole(input.role),
+  nextAction: resolveNextAction(input.role),
 });
 
 const ensureClientProfile = async (authUserId: string) => {
@@ -157,80 +181,26 @@ export const resolveAuthContext = async (uid: string, email: string): Promise<Au
 
   const linkedShopByOwner = await prisma.shop.findFirst({
     where: { authUserId: authUser.id },
-    select: { id: true },
+    select: { id: true, status: true, active: true },
   });
 
   if (linkedShopByOwner) {
+    const canOperateAsStore = isStoreRoleEligibleByShopState(linkedShopByOwner);
+    const role = canOperateAsStore ? AuthRole.STORE : AuthRole.PENDING_STORE;
+    const userType = canOperateAsStore ? AuthUserType.SHOP : AuthUserType.CLIENT;
     await syncAuthUserBase(authUser.id, {
-      userType: AuthUserType.SHOP,
-      role: AuthRole.STORE,
+      userType,
+      role,
       firebaseUid: uid,
     });
     return buildContext({
       uid,
       email: normalizedEmail,
       authUserId: authUser.id,
-      userType: AuthUserType.SHOP,
-      role: AuthRole.STORE,
+      userType,
+      role,
       status: authUser.status,
       shopId: linkedShopByOwner.id,
-    });
-  }
-
-  const linkedShopByEmail = await prisma.shop.findFirst({
-    where: {
-      OR: [
-        {
-          email: {
-            equals: normalizedEmail,
-            mode: 'insensitive',
-          },
-        },
-        {
-          contactEmailPrivate: {
-            equals: normalizedEmail,
-            mode: 'insensitive',
-          },
-        },
-      ],
-    },
-    select: { id: true, authUserId: true, requiresEmailFix: true, email: true },
-  });
-
-  if (linkedShopByEmail) {
-    await prisma.$transaction(async (tx) => {
-      if (
-        linkedShopByEmail.authUserId !== authUser.id ||
-        linkedShopByEmail.requiresEmailFix ||
-        !normalizeEmail(linkedShopByEmail.email)
-      ) {
-        await tx.shop.update({
-          where: { id: linkedShopByEmail.id },
-          data: {
-            authUserId: authUser.id,
-            requiresEmailFix: false,
-            ...(normalizeEmail(linkedShopByEmail.email) ? {} : { email: normalizedEmail }),
-          },
-        });
-      }
-      await tx.authUser.update({
-        where: { id: authUser.id },
-        data: {
-          userType: AuthUserType.SHOP,
-          role: AuthRole.STORE,
-          firebaseUid: uid,
-          lastLoginAt: new Date(),
-        },
-      });
-    });
-    return buildContext({
-      uid,
-      email: normalizedEmail,
-      authUserId: authUser.id,
-      userType: AuthUserType.SHOP,
-      role: AuthRole.STORE,
-      status: authUser.status,
-      shopId: linkedShopByEmail.id,
     });
   }
 
@@ -242,11 +212,10 @@ export const resolveAuthContext = async (uid: string, email: string): Promise<Au
   );
 
   let role = authUser.role;
-  if (role === AuthRole.SUPERADMIN || role === AuthRole.ADMIN) {
-    role = AuthRole.USER;
-  } else if (role === AuthRole.STORE) {
+  if (role === AuthRole.STORE) {
     role = AuthRole.PENDING_STORE;
-  } else if (role === AuthRole.UNDEFINED && hasClientProfile) {
+  }
+  if (role === AuthRole.UNDEFINED && hasClientProfile) {
     role = AuthRole.USER;
   }
 
@@ -291,6 +260,12 @@ export const completeOnboardingIntent = async (
     });
     if (!authUser) {
       throw { status: 404, message: 'Usuario no encontrado.' };
+    }
+    if (isAdminRole(authUser.role) || authUser.userType === AuthUserType.ADMIN) {
+      throw { status: 403, message: 'No se puede modificar el rol de una cuenta administrativa.' };
+    }
+    if (!requiresOnboardingByRole(authUser.role)) {
+      throw { status: 409, message: 'El onboarding ya fue completado para este usuario.' };
     }
 
     if (normalizedIntent === 'USER') {

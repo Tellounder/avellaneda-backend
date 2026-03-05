@@ -722,10 +722,124 @@ const syncAuthUserStatus = async (
 ) => {
   if (!authUserId) return;
   const nextStatus = resolveAuthUserStatus(status, active);
+  const authUser = await client.authUser.findUnique({
+    where: { id: authUserId },
+    select: { userType: true, role: true },
+  });
+  if (!authUser) return;
+  const shouldPromoteStoreOwner =
+    nextStatus === AuthUserStatus.ACTIVE &&
+    authUser.userType !== AuthUserType.ADMIN &&
+    authUser.role !== AuthRole.STORE;
   await client.authUser.update({
     where: { id: authUserId },
-    data: { status: nextStatus },
+    data: {
+      status: nextStatus,
+      ...(shouldPromoteStoreOwner
+        ? { userType: AuthUserType.SHOP, role: AuthRole.STORE }
+        : {}),
+    },
   });
+};
+
+const ensurePendingShopOwnerAuthUser = async (
+  tx: Prisma.TransactionClient,
+  params: { ownerAuthUserId?: string | null; ownerEmail: string }
+) => {
+  const promoteToPendingStore = async (authUserId: string) => {
+    await tx.authUser.update({
+      where: { id: authUserId },
+      data: {
+        userType: AuthUserType.CLIENT,
+        role: AuthRole.PENDING_STORE,
+        status: AuthUserStatus.ACTIVE,
+        lastLoginAt: new Date(),
+      },
+    });
+  };
+
+  const assertOwnerCandidate = (input: {
+    id: string;
+    userType: AuthUserType;
+    role: AuthRole;
+    shopId: string | null;
+  }) => {
+    if (input.userType === AuthUserType.ADMIN || input.role === AuthRole.ADMIN || input.role === AuthRole.SUPERADMIN) {
+      throw createSelfRegisterError(409, 'Ese email pertenece a una cuenta administrativa.', {
+        code: 'DUPLICATE_CONTACT',
+        fieldErrors: {
+          email: 'Ese email no puede usarse para registrar una tienda.',
+        },
+      });
+    }
+    if (input.shopId) {
+      throw createSelfRegisterError(409, 'Ese email ya tiene una tienda asignada.', {
+        code: 'DUPLICATE_CONTACT',
+        fieldErrors: {
+          email: 'Ese email ya tiene una tienda asignada.',
+        },
+      });
+    }
+  };
+
+  if (params.ownerAuthUserId) {
+    const ownerByContext = await tx.authUser.findUnique({
+      where: { id: params.ownerAuthUserId },
+      select: {
+        id: true,
+        userType: true,
+        role: true,
+        shop: { select: { id: true } },
+      },
+    });
+    if (!ownerByContext) {
+      throw createSelfRegisterError(404, 'No se encontro la cuenta dueña para este autoregistro.', {
+        code: 'DUPLICATE_CONTACT',
+      });
+    }
+    assertOwnerCandidate({
+      id: ownerByContext.id,
+      userType: ownerByContext.userType,
+      role: ownerByContext.role,
+      shopId: ownerByContext.shop?.id || null,
+    });
+    await promoteToPendingStore(ownerByContext.id);
+    return ownerByContext.id;
+  }
+
+  const ownerByEmail = await tx.authUser.findUnique({
+    where: { email: params.ownerEmail },
+    select: {
+      id: true,
+      userType: true,
+      role: true,
+      shop: { select: { id: true } },
+    },
+  });
+
+  if (ownerByEmail) {
+    assertOwnerCandidate({
+      id: ownerByEmail.id,
+      userType: ownerByEmail.userType,
+      role: ownerByEmail.role,
+      shopId: ownerByEmail.shop?.id || null,
+    });
+    await promoteToPendingStore(ownerByEmail.id);
+    return ownerByEmail.id;
+  }
+
+  const createdOwner = await tx.authUser.create({
+    data: {
+      email: params.ownerEmail,
+      passwordHash: null,
+      userType: AuthUserType.CLIENT,
+      role: AuthRole.PENDING_STORE,
+      status: AuthUserStatus.ACTIVE,
+      lastLoginAt: new Date(),
+    },
+    select: { id: true },
+  });
+  return createdOwner.id;
 };
 
 export const getWhatsappLimit = (plan: unknown) => {
@@ -1521,7 +1635,12 @@ export const getShopById = async (id: string) => {
 
 export const createSelfRegisteredShop = async (
   input: SelfRegisterInput,
-  context?: { ip?: string | null; userAgent?: string | null }
+  context?: {
+    ip?: string | null;
+    userAgent?: string | null;
+    authUserId?: string | null;
+    authRole?: AuthRole | null;
+  }
 ) => {
   const storeName = normalizeText(input?.storeName);
   const razonSocial = normalizeText(input?.razonSocial);
@@ -1543,6 +1662,12 @@ export const createSelfRegisteredShop = async (
   const website = websiteFromInput || null;
   const socialCount = socialHandles.length + (website ? 1 : 0);
   const address = buildSelfRegisterAddress(input?.address);
+  const ownerAuthUserId =
+    context?.authUserId &&
+    context?.authRole !== AuthRole.ADMIN &&
+    context?.authRole !== AuthRole.SUPERADMIN
+      ? context.authUserId
+      : null;
 
   if (!storeName || storeName.length < SELF_REGISTER_MIN_STORE_NAME_LEN) {
     throw createSelfRegisterError(400, 'Nombre de tienda invalido.', {
@@ -1772,8 +1897,13 @@ export const createSelfRegisteredShop = async (
   };
 
   const createdShop = await prisma.$transaction(async (tx) => {
+    const ensuredOwnerAuthUserId = await ensurePendingShopOwnerAuthUser(tx, {
+      ownerAuthUserId,
+      ownerEmail: email,
+    });
+
     const slug = await ensureUniqueSlug(storeName, tx);
-    return tx.shop.create({
+    const created = await tx.shop.create({
       data: {
         name: storeName,
         slug,
@@ -1827,10 +1957,12 @@ export const createSelfRegisteredShop = async (
         streamQuota: 0,
         reelQuota: 0,
         active: true,
+        authUserId: ensuredOwnerAuthUserId,
         ...(socialHandles.length > 0 ? { socialHandles: { create: socialHandles } } : {}),
       },
       select: shopPrivateSelect,
     });
+    return created;
   });
 
   await notifyAdmins(`Nueva tienda auto-registrada: ${createdShop.name}.`, {

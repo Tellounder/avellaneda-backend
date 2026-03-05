@@ -10,6 +10,7 @@ import {
 } from '@prisma/client';
 import http from 'http';
 import https from 'https';
+import { createHash } from 'crypto';
 import prisma from './repo';
 import { createQuotaTransaction, reserveReelQuota } from '../../services/quota.service';
 
@@ -70,6 +71,54 @@ const REEL_PROGRESS_SELECT = {
   thumbnailUrl: true,
 } as const;
 
+type ShowcaseBucket = {
+  key: string;
+  minAgeHours: number;
+  maxAgeHours: number | null;
+};
+
+const SHOWCASE_BUCKETS: ShowcaseBucket[] = [
+  { key: 'h24', minAgeHours: 0, maxAgeHours: 24 },
+  { key: 'h48', minAgeHours: 24, maxAgeHours: 48 },
+  { key: 'h72', minAgeHours: 48, maxAgeHours: 72 },
+  { key: 'h168', minAgeHours: 72, maxAgeHours: 168 },
+  { key: 'h336', minAgeHours: 168, maxAgeHours: 336 },
+  { key: 'h720', minAgeHours: 336, maxAgeHours: 720 },
+  { key: 'legacy', minAgeHours: 720, maxAgeHours: null },
+];
+
+const SHOWCASE_STATUS_POOL = [ReelStatus.ACTIVE, ReelStatus.EXPIRED] as const;
+const SHOWCASE_FETCH_PER_BUCKET = Math.max(
+  20,
+  Number(process.env.REELS_SHOWCASE_FETCH_PER_BUCKET || 120)
+);
+
+const scoreBySeed = (seed: string, reelId: string) => {
+  const hash = createHash('sha1').update(`${seed}:${reelId}`).digest('hex').slice(0, 12);
+  return Number.parseInt(hash, 16);
+};
+
+const sortBySeed = <T extends { id: string; createdAt: Date }>(items: T[], seed: string) =>
+  [...items].sort((a, b) => {
+    const scoreA = scoreBySeed(seed, a.id);
+    const scoreB = scoreBySeed(seed, b.id);
+    if (scoreA !== scoreB) return scoreA - scoreB;
+    return b.createdAt.getTime() - a.createdAt.getTime();
+  });
+
+const buildBucketDateWhere = (now: Date, bucket: ShowcaseBucket) => {
+  const dateWhere: { gte?: Date; lt?: Date } = {};
+  if (bucket.maxAgeHours !== null) {
+    dateWhere.gte = new Date(now.getTime() - bucket.maxAgeHours * 60 * 60 * 1000);
+  }
+  if (bucket.minAgeHours > 0) {
+    dateWhere.lt = new Date(now.getTime() - bucket.minAgeHours * 60 * 60 * 1000);
+  } else {
+    dateWhere.lt = now;
+  }
+  return dateWhere;
+};
+
 export const getActiveReels = async (limit = 80) => {
   const now = new Date();
   return prisma.reel.findMany({
@@ -82,6 +131,84 @@ export const getActiveReels = async (limit = 80) => {
     take: limit,
     select: REEL_PUBLIC_SELECT,
   });
+};
+
+export const getShowcaseReels = async (limit = 6, rotateSeed?: string) => {
+  const safeLimit = Math.min(24, Math.max(1, Number(limit) || 6));
+  const now = new Date();
+  const seed = String(rotateSeed || '').trim() || now.toISOString().slice(0, 13);
+  const picked: Array<{
+    id: string;
+    shopId: string;
+    type: ReelType;
+    videoUrl: string | null;
+    photoUrls: string[];
+    thumbnailUrl: string | null;
+    presetLabel: string | null;
+    durationSeconds: number;
+    status: ReelStatus;
+    platform: SocialPlatform;
+    hidden: boolean;
+    views: number;
+    createdAt: Date;
+    expiresAt: Date;
+    shop: {
+      id: string;
+      name: string;
+      slug: string;
+      logoUrl: string | null;
+      coverUrl: string | null;
+      website: string | null;
+      addressDetails: unknown;
+    } | null;
+  }> = [];
+  const pickedIds = new Set<string>();
+
+  for (const bucket of SHOWCASE_BUCKETS) {
+    if (picked.length >= safeLimit) break;
+    const rows = await prisma.reel.findMany({
+      where: {
+        hidden: false,
+        status: { in: [...SHOWCASE_STATUS_POOL] },
+        createdAt: buildBucketDateWhere(now, bucket),
+        OR: [{ videoUrl: { not: null } }, { photoUrls: { isEmpty: false } }],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: SHOWCASE_FETCH_PER_BUCKET,
+      select: REEL_PUBLIC_SELECT,
+    });
+    if (!rows.length) continue;
+
+    const randomized = sortBySeed(rows, `${seed}:${bucket.key}`);
+    for (const reel of randomized) {
+      if (picked.length >= safeLimit) break;
+      if (pickedIds.has(reel.id)) continue;
+      picked.push(reel);
+      pickedIds.add(reel.id);
+    }
+  }
+
+  if (picked.length < safeLimit) {
+    const fallbackRows = await prisma.reel.findMany({
+      where: {
+        hidden: false,
+        status: { in: [...SHOWCASE_STATUS_POOL] },
+        OR: [{ videoUrl: { not: null } }, { photoUrls: { isEmpty: false } }],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: SHOWCASE_FETCH_PER_BUCKET * 2,
+      select: REEL_PUBLIC_SELECT,
+    });
+    const randomized = sortBySeed(fallbackRows, `${seed}:fallback`);
+    for (const reel of randomized) {
+      if (picked.length >= safeLimit) break;
+      if (pickedIds.has(reel.id)) continue;
+      picked.push(reel);
+      pickedIds.add(reel.id);
+    }
+  }
+
+  return picked.slice(0, safeLimit);
 };
 
 export const getAllReelsAdmin = async () => {

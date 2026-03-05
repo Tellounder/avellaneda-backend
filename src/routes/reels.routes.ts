@@ -5,6 +5,7 @@ import { requireAdmin, requireAuth, requireShopOrAdmin } from '../middleware/aut
 const router = Router();
 
 router.get('/', ReelsController.getActiveReels);
+router.get('/showcase', ReelsController.getShowcaseReels);
 router.get('/admin', requireAdmin, ReelsController.getAllReelsAdmin);
 router.get('/shop/:shopId', requireShopOrAdmin((req) => req.params.shopId), ReelsController.getReelsByShop);
 router.get('/:id/status', requireAuth, ReelsController.getReelStatus);

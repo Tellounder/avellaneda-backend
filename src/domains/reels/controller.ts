@@ -4,6 +4,7 @@ import * as ReelsService from './service';
 import { getOrSetCache } from '../../utils/publicCache';
 
 const REELS_CACHE_MS = 15_000;
+const SHOWCASE_REELS_CACHE_MS = 60 * 60 * 1000;
 
 const sanitizeAddressDetails = (details: any) => {
   if (!details || typeof details !== 'object') return details;
@@ -94,6 +95,24 @@ export const getActiveReels = async (req: Request, res: Response) => {
   const cacheKey = `reels:active:${limit}`;
   const data = await getOrSetCache(cacheKey, REELS_CACHE_MS, () =>
     ReelsService.getActiveReels(limit)
+  );
+  res.json(
+    sanitizeReelPayload(data, {
+      stripEditorState: true,
+      stripProcessingFields: true,
+    })
+  );
+};
+
+export const getShowcaseReels = async (req: Request, res: Response) => {
+  const limit = Math.min(
+    24,
+    Math.max(1, Number.parseInt(String(req.query.limit || '6'), 10) || 6)
+  );
+  const rotationHourUtc = new Date().toISOString().slice(0, 13);
+  const cacheKey = `reels:showcase:${limit}:${rotationHourUtc}`;
+  const data = await getOrSetCache(cacheKey, SHOWCASE_REELS_CACHE_MS, () =>
+    ReelsService.getShowcaseReels(limit, rotationHourUtc)
   );
   res.json(
     sanitizeReelPayload(data, {

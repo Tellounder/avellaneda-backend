@@ -17,8 +17,8 @@ const gcsPublicBaseUrl = String(process.env.GCS_PUBLIC_BASE_URL || '')
   .trim()
   .replace(/\/+$/g, '');
 const reelsBucket = gcsReelsBucket;
-const TARGET_WIDTH = 720;
-const TARGET_HEIGHT = 1280;
+const TARGET_WIDTH = 1080;
+const TARGET_HEIGHT = 1920;
 const TARGET_ASPECT = TARGET_WIDTH / TARGET_HEIGHT;
 const OVERLAY_SUPERSAMPLE = Math.max(
   1,
@@ -43,7 +43,7 @@ const MAX_SOURCE_VIDEO_SECONDS = Math.max(
   5,
   Number(process.env.REEL_MAX_SOURCE_VIDEO_SECONDS || 17)
 );
-export const REEL_RENDER_PROFILE_VERSION = 'reels-render-v3-p2';
+export const REEL_RENDER_PROFILE_VERSION = 'reels-render-v4-text-stage1080';
 const PHOTO_ENCODE_PROFILE = Object.freeze({
   codec: 'mjpeg',
   qualityQv: 2,
@@ -56,13 +56,18 @@ const VIDEO_ENCODE_PROFILE = Object.freeze({
   level: '4.0',
   crf: 23,
   fps: 30,
-  maxrate: '3200k',
-  bufsize: '6400k',
+  maxrate: '5200k',
+  bufsize: '10400k',
   gop: 60,
   pixFmt: 'yuv420p',
   audioCodec: 'aac',
   audioBitrate: '128k',
 });
+const DEBUG_SAVE_TEXT_SVG =
+  String(process.env.REEL_DEBUG_SAVE_TEXT_SVG || '')
+    .trim()
+    .toLowerCase() === 'true';
+const PRIMARY_TEXT_FONT = 'Manrope';
 let manropeFontBase64: string | null = null;
 let manropePathLogged = false;
 
@@ -182,6 +187,16 @@ const resolveBaseline = (anchorY?: number) => {
   if (value >= 0.66) return 'alphabetic';
   if (value >= 0.33) return 'middle';
   return 'hanging';
+};
+
+const resolveStickerTextAlign = (sticker: any) => {
+  const raw = String(sticker?.align || sticker?.textAlign || sticker?.horizontalAlign || '')
+    .trim()
+    .toLowerCase();
+  if (raw === 'left' || raw === 'start') return 'start';
+  if (raw === 'right' || raw === 'end') return 'end';
+  if (raw === 'center' || raw === 'middle') return 'middle';
+  return resolveTextAnchor(sticker?.anchorX);
 };
 
 const resolveCropRect = (
@@ -543,14 +558,16 @@ const loadManropeFont = async () => {
   try {
     const buffer = await fs.readFile(MANROPE_FONT_PATH);
     if (!buffer.length) {
-      throw new Error('Fuente Manrope vacia.');
+      console.warn('[reels-text-overlay] Fuente Manrope vacia. Se usa fallback sans-serif.');
+      return null;
     }
     manropeFontBase64 = buffer.toString('base64');
     return manropeFontBase64;
-  } catch (error) {
-    throw new Error(
-      `No se pudo cargar la fuente Manrope (${MANROPE_FONT_PATH}).`
+  } catch {
+    console.warn(
+      `[reels-text-overlay] No se pudo cargar Manrope (${MANROPE_FONT_PATH}). Se usa fallback sans-serif.`
     );
+    return null;
   }
 };
 
@@ -566,26 +583,39 @@ const buildStickerOverlay = async (editorState: any, tempDir: string) => {
   if (!editorState || !Array.isArray(editorState.stickers)) return null;
   const stickers = editorState.stickers.filter((sticker: any) => String(sticker?.text || '').trim());
   if (!stickers.length) return null;
+  const startedAt = Date.now();
   const spec = resolveEditorSpec(editorState);
   const fontBase64 = await loadManropeFont();
+  const fontFamily = fontBase64
+    ? `'${PRIMARY_TEXT_FONT}', 'Segoe UI', Arial, sans-serif`
+    : `'Segoe UI', Arial, sans-serif`;
+  const fontLog = fontBase64 ? PRIMARY_TEXT_FONT : 'sans-serif';
+  const localOverlayWidth = OVERLAY_WIDTH;
+  const localOverlayHeight = OVERLAY_HEIGHT;
   const fontFace = `
   <defs>
     <style type="text/css">
-      @font-face {
-        font-family: 'Manrope';
+      ${fontBase64 ? `@font-face {
+        font-family: '${PRIMARY_TEXT_FONT}';
         src: url("data:font/ttf;base64,${fontBase64}") format('truetype');
         font-weight: 100 900;
         font-style: normal;
+      }` : ''}
+      text {
+        text-rendering: geometricPrecision;
+        shape-rendering: geometricPrecision;
+        font-kerning: normal;
       }
     </style>
   </defs>`;
 
+  let totalLines = 0;
   const elements = stickers.map((sticker: any) => {
     const rawText = String(sticker?.text || '').trim();
     const normalizedX = normalizeStickerFromSpec(Number(sticker.x), spec, 'x');
     const normalizedY = normalizeStickerFromSpec(Number(sticker.y), spec, 'y');
-    const x = Math.round(clampNumber(normalizedX, -2, 2, 0) * OVERLAY_WIDTH);
-    const y = Math.round(clampNumber(normalizedY, -2, 2, 0) * OVERLAY_HEIGHT);
+    const x = Math.round(clampNumber(normalizedX, -2, 2, 0) * localOverlayWidth);
+    const y = Math.round(clampNumber(normalizedY, -2, 2, 0) * localOverlayHeight);
     const scale = clampNumber(Number(sticker.scale ?? 1), 0.5, 3, 1);
     const baseFontSize = Number(sticker.fontSize ?? 42);
     const baseLineHeight = Number(sticker.lineHeight ?? baseFontSize * 1.25);
@@ -600,39 +630,60 @@ const buildStickerOverlay = async (editorState: any, tempDir: string) => {
       Math.round(baseLineHeight * stageRatio * scale * OVERLAY_SUPERSAMPLE)
     );
     const color = String(sticker.color || '#ffffff');
+    const opacity = clampNumber(Number(sticker.opacity ?? 1), 0, 1, 1);
     const rotation = clampNumber(Number(sticker.rotation ?? 0), -180, 180, 0);
-    const fontFamily = 'Manrope';
-    const textAnchor = resolveTextAnchor(sticker.anchorX);
+    const textAnchor = resolveStickerTextAlign(sticker);
     const baseline = resolveBaseline(sticker.anchorY);
     const stickerWidthRaw = Number(
       sticker.width ?? sticker.maxWidth ?? sticker.textBoxWidth ?? sticker.boxWidth ?? NaN
     );
     const stickerWidthNorm = normalizeStickerWidthFromSpec(stickerWidthRaw, spec);
     const boxWidthPx = Number.isFinite(stickerWidthNorm)
-      ? Math.max(0.18, Math.min(1, stickerWidthNorm)) * OVERLAY_WIDTH
-      : OVERLAY_WIDTH * 0.86;
-    const approxCharWidth = Math.max(6, fontSize * 0.56);
+      ? Math.max(0.12, Math.min(1, stickerWidthNorm)) * localOverlayWidth
+      : localOverlayWidth * 0.82;
+    const approxCharWidth = Math.max(6, fontSize * 0.62);
     const maxCharsPerLine = Math.max(8, Math.floor((boxWidthPx * 0.95) / approxCharWidth));
     const lines = wrapText(rawText, maxCharsPerLine);
+    totalLines += lines.length;
     const tspans = lines
       .map((line, index) => {
         const safeLine = escapeSvgText(line);
         const dy = index === 0 ? '0' : String(lineHeight);
-        return `<tspan x="${x}" dy="${dy}">${safeLine}</tspan>`;
+        return `<tspan x="0" dy="${dy}">${safeLine}</tspan>`;
       })
       .join('');
-    const transform = rotation ? ` transform="rotate(${rotation} ${x} ${y})"` : '';
-    return `<text x="${x}" y="${y}" fill="${color}" font-size="${fontSize}" font-family="${fontFamily}" text-anchor="${textAnchor}" dominant-baseline="${baseline}"${transform}>${tspans}</text>`;
+    return `
+<g transform="translate(${x} ${y}) rotate(${rotation})">
+  <text x="0" y="0" fill="${color}" fill-opacity="${opacity}" font-size="${fontSize}" font-family="${fontFamily}" text-anchor="${textAnchor}" dominant-baseline="${baseline}">${tspans}</text>
+</g>`;
   });
 
   const svg = `
-<svg xmlns="http://www.w3.org/2000/svg" width="${OVERLAY_WIDTH}" height="${OVERLAY_HEIGHT}" viewBox="0 0 ${OVERLAY_WIDTH} ${OVERLAY_HEIGHT}">
+<svg xmlns="http://www.w3.org/2000/svg" width="${localOverlayWidth}" height="${localOverlayHeight}" viewBox="0 0 ${localOverlayWidth} ${localOverlayHeight}">
   ${fontFace}
   ${elements.join('\n')}
 </svg>`;
 
   const overlayPath = path.join(tempDir, 'reel-overlay.png');
-  await sharp(Buffer.from(svg)).png().toFile(overlayPath);
+  if (DEBUG_SAVE_TEXT_SVG) {
+    await fs.writeFile(path.join(tempDir, 'reel-overlay.debug.svg'), svg, 'utf8').catch(() => undefined);
+  }
+  await sharp(Buffer.from(svg), { density: 300 })
+    .ensureAlpha()
+    .resize(TARGET_WIDTH, TARGET_HEIGHT, {
+      fit: 'fill',
+      kernel: sharp.kernel.lanczos3,
+    })
+    .png({
+      compressionLevel: 9,
+      adaptiveFiltering: true,
+      palette: false,
+    })
+    .toFile(overlayPath);
+  const renderTimeMs = Date.now() - startedAt;
+  console.log(
+    `[reels-text-overlay] width=${TARGET_WIDTH} height=${TARGET_HEIGHT} font=${fontLog} lines=${totalLines} renderTimeMs=${renderTimeMs}`
+  );
   return overlayPath;
 };
 
@@ -801,9 +852,9 @@ export const processPhotoFromPath = async (
       '-frames:v',
       '1',
       '-q:v',
-      '2',
+      String(PHOTO_ENCODE_PROFILE.qualityQv),
       '-pix_fmt',
-      'yuvj444p',
+      PHOTO_ENCODE_PROFILE.pixFmt,
       '-an',
       '-y',
     ])
@@ -927,33 +978,33 @@ export const processVideoFromPath = async (
       '-map',
       '0:a?',
       '-c:v',
-      'libx264',
+      VIDEO_ENCODE_PROFILE.codec,
       '-threads',
       String(FFMPEG_THREADS),
       '-preset',
-      'veryfast',
+      VIDEO_ENCODE_PROFILE.preset,
       '-profile:v',
-      'high',
+      VIDEO_ENCODE_PROFILE.profile,
       '-level:v',
-      '4.0',
+      VIDEO_ENCODE_PROFILE.level,
       '-crf',
-      '23',
+      String(VIDEO_ENCODE_PROFILE.crf),
       '-r',
-      '30',
+      String(VIDEO_ENCODE_PROFILE.fps),
       '-maxrate',
-      '3200k',
+      VIDEO_ENCODE_PROFILE.maxrate,
       '-bufsize',
-      '6400k',
+      VIDEO_ENCODE_PROFILE.bufsize,
       '-g',
-      '60',
+      String(VIDEO_ENCODE_PROFILE.gop),
       '-movflags',
       '+faststart',
       '-pix_fmt',
-      'yuv420p',
+      VIDEO_ENCODE_PROFILE.pixFmt,
       '-c:a',
-      'aac',
+      VIDEO_ENCODE_PROFILE.audioCodec,
       '-b:a',
-      '128k',
+      VIDEO_ENCODE_PROFILE.audioBitrate,
       '-shortest',
       '-y',
     ])

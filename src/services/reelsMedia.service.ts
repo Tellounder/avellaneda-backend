@@ -169,6 +169,7 @@ const scaleFromSpec = (value: number, spec: ResolvedEditorSpec | null) => {
 };
 
 const resolveTextAnchor = (anchorX?: number) => {
+  if (anchorX === undefined || anchorX === null) return 'middle';
   const value = clampNumber(Number(anchorX ?? 0), 0, 1, 0);
   if (value >= 0.66) return 'end';
   if (value >= 0.33) return 'middle';
@@ -176,6 +177,7 @@ const resolveTextAnchor = (anchorX?: number) => {
 };
 
 const resolveBaseline = (anchorY?: number) => {
+  if (anchorY === undefined || anchorY === null) return 'middle';
   const value = clampNumber(Number(anchorY ?? 0), 0, 1, 0);
   if (value >= 0.66) return 'alphabetic';
   if (value >= 0.33) return 'middle';
@@ -443,6 +445,67 @@ const clampNumber = (value: number, min: number, max: number, fallback: number) 
   return Math.max(min, Math.min(max, value));
 };
 
+const normalizeStickerFromSpec = (
+  value: number,
+  spec: ResolvedEditorSpec | null,
+  axis: 'x' | 'y'
+) => {
+  if (!Number.isFinite(value)) return 0;
+  if (Math.abs(value) <= 1.5) return value;
+  if (!spec) return value;
+  const size = axis === 'x' ? spec.width : spec.height;
+  if (!Number.isFinite(size) || size <= 0) return value;
+  return value / size;
+};
+
+const normalizeStickerWidthFromSpec = (value: number, spec: ResolvedEditorSpec | null) => {
+  if (!Number.isFinite(value) || value <= 0) return NaN;
+  if (value <= 1.5) return value;
+  if (!spec || !Number.isFinite(spec.width) || spec.width <= 0) return value;
+  return value / spec.width;
+};
+
+const splitLongWord = (word: string, maxCharsPerLine: number) => {
+  if (word.length <= maxCharsPerLine) return [word];
+  const chunks: string[] = [];
+  for (let i = 0; i < word.length; i += maxCharsPerLine) {
+    chunks.push(word.slice(i, i + maxCharsPerLine));
+  }
+  return chunks;
+};
+
+const wrapText = (rawText: string, maxCharsPerLine: number) => {
+  const maxChars = Math.max(6, Math.min(90, Math.round(maxCharsPerLine)));
+  const wrapped: string[] = [];
+  const paragraphs = rawText.split(/\r?\n/);
+  for (const paragraph of paragraphs) {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      wrapped.push('');
+      continue;
+    }
+    let current = '';
+    for (const token of words) {
+      const pieces = splitLongWord(token, maxChars);
+      for (const piece of pieces) {
+        if (!current) {
+          current = piece;
+          continue;
+        }
+        const candidate = `${current} ${piece}`;
+        if (candidate.length <= maxChars) {
+          current = candidate;
+        } else {
+          wrapped.push(current);
+          current = piece;
+        }
+      }
+    }
+    if (current) wrapped.push(current);
+  }
+  return wrapped.length ? wrapped : [rawText];
+};
+
 const resolveVideoTrimWindow = (
   editorState: any,
   sourceDurationSeconds: number
@@ -519,27 +582,38 @@ const buildStickerOverlay = async (editorState: any, tempDir: string) => {
 
   const elements = stickers.map((sticker: any) => {
     const rawText = String(sticker?.text || '').trim();
-    const normalizedX = normalizeFromSpec(Number(sticker.x), spec, 'x');
-    const normalizedY = normalizeFromSpec(Number(sticker.y), spec, 'y');
+    const normalizedX = normalizeStickerFromSpec(Number(sticker.x), spec, 'x');
+    const normalizedY = normalizeStickerFromSpec(Number(sticker.y), spec, 'y');
     const x = Math.round(clampNumber(normalizedX, -2, 2, 0) * OVERLAY_WIDTH);
     const y = Math.round(clampNumber(normalizedY, -2, 2, 0) * OVERLAY_HEIGHT);
     const scale = clampNumber(Number(sticker.scale ?? 1), 0.5, 3, 1);
     const baseFontSize = Number(sticker.fontSize ?? 42);
     const baseLineHeight = Number(sticker.lineHeight ?? baseFontSize * 1.25);
+    const stageRatio =
+      spec && Number.isFinite(spec.width) && spec.width > 0 ? TARGET_WIDTH / spec.width : 1;
     const fontSize = Math.max(
       10,
-      Math.round(scaleFromSpec(baseFontSize, spec) * scale * OVERLAY_SUPERSAMPLE)
+      Math.round(baseFontSize * stageRatio * scale * OVERLAY_SUPERSAMPLE)
     );
     const lineHeight = Math.max(
       10,
-      Math.round(scaleFromSpec(baseLineHeight, spec) * scale * OVERLAY_SUPERSAMPLE)
+      Math.round(baseLineHeight * stageRatio * scale * OVERLAY_SUPERSAMPLE)
     );
     const color = String(sticker.color || '#ffffff');
     const rotation = clampNumber(Number(sticker.rotation ?? 0), -180, 180, 0);
     const fontFamily = 'Manrope';
     const textAnchor = resolveTextAnchor(sticker.anchorX);
     const baseline = resolveBaseline(sticker.anchorY);
-    const lines = rawText.split(/\r?\n/);
+    const stickerWidthRaw = Number(
+      sticker.width ?? sticker.maxWidth ?? sticker.textBoxWidth ?? sticker.boxWidth ?? NaN
+    );
+    const stickerWidthNorm = normalizeStickerWidthFromSpec(stickerWidthRaw, spec);
+    const boxWidthPx = Number.isFinite(stickerWidthNorm)
+      ? Math.max(0.18, Math.min(1, stickerWidthNorm)) * OVERLAY_WIDTH
+      : OVERLAY_WIDTH * 0.86;
+    const approxCharWidth = Math.max(6, fontSize * 0.56);
+    const maxCharsPerLine = Math.max(8, Math.floor((boxWidthPx * 0.95) / approxCharWidth));
+    const lines = wrapText(rawText, maxCharsPerLine);
     const tspans = lines
       .map((line, index) => {
         const safeLine = escapeSvgText(line);

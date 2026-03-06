@@ -10,6 +10,7 @@ import ffmpegPath from 'ffmpeg-static';
 import sharp from 'sharp';
 // `fluent-ffmpeg` does not ship typings in our runtime path.
 const ffmpeg: any = require('fluent-ffmpeg');
+const ffprobeStatic: any = require('ffprobe-static');
 
 const providerRaw = String(process.env.STORAGE_PROVIDER || '').trim().toLowerCase();
 const gcsReelsBucket = String(process.env.GCS_BUCKET || '').trim();
@@ -319,6 +320,12 @@ const ensureFfmpeg = () => {
     throw new Error('ffmpeg no disponible en el servidor.');
   }
   ffmpeg.setFfmpegPath(ffmpegPath);
+  const ffprobePath = String((ffprobeStatic as any)?.path || '').trim();
+  if (ffprobePath) {
+    ffmpeg.setFfprobePath(ffprobePath);
+    return;
+  }
+  throw new Error('ffprobe no disponible en el servidor.');
 };
 
 const hashFilterGraph = (filter: string) =>

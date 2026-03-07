@@ -34,15 +34,30 @@ const normalizeTags = (input: unknown): string[] => {
   return Array.from(new Set(tags));
 };
 
+const normalizeUsername = (value: unknown) => {
+  const raw = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, '');
+  if (!raw) return null;
+  if (!/^[a-z0-9._]{3,20}$/.test(raw)) {
+    throw new Error(
+      'Usuario invalido. Usa entre 3 y 20 caracteres con letras, numeros, punto o guion bajo.'
+    );
+  }
+  return raw;
+};
+
 const PROFILE_REQUIRED_FIELDS = [
   { key: 'displayName', label: 'Nombre' },
-  { key: 'phone', label: 'Telefono' },
-  { key: 'city', label: 'Ciudad' },
-  { key: 'province', label: 'Provincia' },
+  { key: 'username', label: 'Usuario' },
+  { key: 'onboardingTermsAcceptedAt', label: 'Terminos' },
 ] as const;
 
 const buildProfileCompletion = (profile: {
   displayName?: string | null;
+  username?: string | null;
+  onboardingTermsAcceptedAt?: Date | string | null;
   phone?: string | null;
   city?: string | null;
   province?: string | null;
@@ -218,11 +233,13 @@ export const getClientProfile = async (authUserId: string) => {
     authUserId,
     email: authUser?.email || null,
     displayName: client.displayName,
+    username: client.username,
     avatarUrl: client.avatarUrl,
     phone: client.phone,
     city: client.city,
     province: client.province,
     instagramHandle: client.instagramHandle,
+    onboardingTermsAcceptedAt: client.onboardingTermsAcceptedAt,
     birthDate: client.birthDate,
     styleTags: client.styleTags || [],
     marketingOptIn: client.marketingOptIn,
@@ -237,6 +254,7 @@ export const updateClientProfile = async (
   authUserId: string,
   data: {
     displayName?: unknown;
+    username?: unknown;
     avatarUrl?: unknown;
     phone?: unknown;
     city?: unknown;
@@ -245,12 +263,16 @@ export const updateClientProfile = async (
     birthDate?: unknown;
     styleTags?: unknown;
     marketingOptIn?: unknown;
+    onboardingTermsAccepted?: unknown;
   }
 ) => {
   const payload: Record<string, any> = {};
 
   if (data.displayName !== undefined) {
     payload.displayName = normalizeText(data.displayName);
+  }
+  if (data.username !== undefined) {
+    payload.username = normalizeUsername(data.username);
   }
   if (data.avatarUrl !== undefined) {
     payload.avatarUrl = normalizeText(data.avatarUrl);
@@ -284,6 +306,22 @@ export const updateClientProfile = async (
   }
   if (data.marketingOptIn !== undefined) {
     payload.marketingOptIn = Boolean(data.marketingOptIn);
+  }
+  if (data.onboardingTermsAccepted !== undefined) {
+    payload.onboardingTermsAcceptedAt = data.onboardingTermsAccepted ? new Date() : null;
+  }
+
+  if (payload.username) {
+    const existing = await prisma.client.findFirst({
+      where: {
+        username: payload.username,
+        authUserId: { not: authUserId },
+      },
+      select: { authUserId: true },
+    });
+    if (existing) {
+      throw new Error('Ese nombre de usuario ya esta en uso.');
+    }
   }
 
   const updated = await prisma.client.upsert({

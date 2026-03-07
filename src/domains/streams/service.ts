@@ -9,6 +9,7 @@ import {
   QuotaResource,
   NotificationType,
   ReportStatus,
+  ShopPlanTier,
   ShopStatus,
   SocialPlatform,
   StreamStatus,
@@ -68,6 +69,12 @@ const normalizePlatform = (value: unknown): SocialPlatform => {
   }
   return 'Instagram';
 };
+
+const normalizePlanCode = (value: unknown) => String(value || '').trim().toUpperCase();
+const isShopWithoutPlan = (shop: { plan?: unknown; planTier?: ShopPlanTier | null }) =>
+  shop.planTier === ShopPlanTier.NONE ||
+  normalizePlanCode(shop.plan) === 'MAP_ONLY' ||
+  normalizePlanCode(shop.plan) === 'SIN_PLAN';
 
 const parseScheduledAt = (data: any) => {
   const raw = data.scheduledAt || data.fullDateISO || data.startTime || data.startDate;
@@ -264,6 +271,10 @@ const validateStreamSchedule = async (
     include: { socialHandles: true },
   });
   if (!shop) throw new Error('Tienda no encontrada.');
+
+  if (isShopWithoutPlan(shop)) {
+    throw new Error('Tu tienda esta en SIN PLAN. Asigna un plan para habilitar vivos.');
+  }
 
   if (shop.status !== ShopStatus.ACTIVE) {
     if (shop.status === ShopStatus.AGENDA_SUSPENDED) {

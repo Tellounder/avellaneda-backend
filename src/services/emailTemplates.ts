@@ -388,4 +388,109 @@ export const buildSelfRegisterConfirmationEmailTemplate = (params: {
   };
 };
 
+export const buildUserWelcomeEmailTemplate = (params: {
+  appUrl: string;
+  displayName?: string;
+}): EmailTemplate => {
+  const displayName = (params.displayName || '').trim();
+  const intro = displayName
+    ? `Hola ${displayName}, ya tienes tu cuenta activa en Avellaneda en Vivo.`
+    : 'Tu cuenta ya esta activa en Avellaneda en Vivo.';
+  const { html, text } = buildBaseEmail({
+    preheader: 'Bienvenido a la comunidad de Avellaneda en Vivo.',
+    badge: 'Cuenta de usuario',
+    title: 'Bienvenido a Avellaneda en Vivo',
+    intro,
+    detail:
+      'Ahora puedes explorar reels y vivos, seguir tiendas, enviar mensajes y comprar productos mediante Distrito Moda.',
+    ctaLabel: 'Ir a la plataforma',
+    ctaUrl: params.appUrl,
+    note: 'Si no reconoces este acceso, cambia tu clave y contacta soporte.',
+    appUrl: params.appUrl,
+  });
+  return {
+    subject: 'Bienvenido a Avellaneda en Vivo',
+    html,
+    text,
+  };
+};
+
+export const buildUserEmailVerificationTemplate = (params: {
+  verifyUrl: string;
+  appUrl: string;
+}): EmailTemplate => {
+  const { html, text } = buildBaseEmail({
+    preheader: 'Confirma tu correo para finalizar tu alta de usuario.',
+    badge: 'Alta de usuario',
+    title: 'Activa tu cuenta',
+    intro: 'Ya casi terminas. Para continuar debes validar tu correo.',
+    detail:
+      'Al confirmar el correo, podras definir o actualizar tu clave y entrar con tu rol de usuario.',
+    ctaLabel: 'Validar correo',
+    ctaUrl: params.verifyUrl,
+    note: 'Este enlace es personal y temporal.',
+    appUrl: params.appUrl,
+  });
+  return {
+    subject: 'Confirma tu cuenta de usuario | Avellaneda en Vivo',
+    html,
+    text,
+  };
+};
+
+export const buildStoreEmailVerificationTemplate = (params: {
+  shopName: string;
+  verifyUrl: string;
+  appUrl: string;
+}): EmailTemplate => {
+  const safeShopName = (params.shopName || 'Tu tienda').trim();
+  const { html, text } = buildBaseEmail({
+    preheader: `Finaliza el alta de ${safeShopName} validando el correo.`,
+    badge: 'Alta de tienda',
+    title: 'Finaliza la activacion de tu tienda',
+    intro: `Hola ${safeShopName}, ya recibimos tu registro.`,
+    detail:
+      'Para que la tienda quede validada y pueda operar en el mapa, confirma tu correo y completa el acceso con clave.',
+    ctaLabel: 'Validar correo y continuar',
+    ctaUrl: params.verifyUrl,
+    note: 'Si no iniciaste este registro, ignora este correo.',
+    appUrl: params.appUrl,
+  });
+  return {
+    subject: `Activa tu tienda ${safeShopName} | Avellaneda en Vivo`,
+    html,
+    text,
+  };
+};
+
+export const buildStoreGoogleWelcomeEmailTemplate = (params: {
+  shopName: string;
+  appUrl: string;
+  shopUrl?: string;
+  mapStatusText?: string;
+}): EmailTemplate => {
+  const safeShopName = (params.shopName || 'Tu tienda').trim();
+  const ctaUrl = (params.shopUrl || params.appUrl || '').trim();
+  const mapStatusText = (params.mapStatusText || '').trim();
+  const detail = mapStatusText
+    ? `Estado actual: ${mapStatusText}. Ya puedes gestionar tu tienda desde la plataforma.`
+    : 'Tu tienda ya quedo vinculada a tu cuenta y puedes gestionarla desde la plataforma.';
+  const { html, text } = buildBaseEmail({
+    preheader: `Tu tienda ${safeShopName} ya quedo vinculada con Google.`,
+    badge: 'Tienda con Google',
+    title: 'Registro de tienda confirmado',
+    intro: `Hola ${safeShopName}, completaste el registro con inicio de sesion Google.`,
+    detail,
+    ctaLabel: 'Abrir mi tienda',
+    ctaUrl,
+    note: 'Este correo es informativo. No requiere pasos adicionales de verificacion.',
+    appUrl: params.appUrl,
+  });
+  return {
+    subject: `Registro confirmado: ${safeShopName} | Avellaneda en Vivo`,
+    html,
+    text,
+  };
+};
+
 export type { EmailTemplate };

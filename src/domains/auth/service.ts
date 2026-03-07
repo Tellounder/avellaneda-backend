@@ -1,15 +1,29 @@
-import { AdminRole, AuthRole, AuthUserStatus, AuthUserType, ShopStatus } from '@prisma/client';
+import {
+  AdminRole,
+  AuthRole,
+  AuthUserStatus,
+  AuthUserType,
+  ShopPlanTier,
+  ShopRegistrationSource,
+  ShopStatus,
+  ShopVerificationState,
+  ShopVisibilityState,
+} from '@prisma/client';
 import prisma from './repo';
 import { firebaseAuth } from '../../lib/firebaseAdmin';
 import { resolveAppUrl, sendEmailTemplate } from '../../services/email.service';
 import {
+  buildStoreEmailVerificationTemplate,
   buildEmailVerificationEmailTemplate,
   buildForgotPasswordEmailTemplate,
+  buildUserEmailVerificationTemplate,
+  buildUserWelcomeEmailTemplate,
 } from '../../services/emailTemplates';
 
 export type AuthContext = {
   uid: string;
   email: string;
+  emailVerified?: boolean;
   authUserId: string;
   userType: AuthUserType;
   role: AuthRole;
@@ -62,6 +76,21 @@ const isAdminRole = (role: AuthRole) => role === AuthRole.ADMIN || role === Auth
 const isStoreRole = (role: AuthRole) => role === AuthRole.STORE;
 const requiresOnboardingByRole = (role: AuthRole) =>
   role === AuthRole.UNDEFINED || role === AuthRole.PENDING_STORE;
+const normalizePlanCode = (value: unknown) => String(value || '').trim().toUpperCase();
+const isNoPlanShop = (shop: { plan?: string | null; planTier?: ShopPlanTier | null }) =>
+  shop.planTier === ShopPlanTier.NONE ||
+  normalizePlanCode(shop.plan) === 'MAP_ONLY' ||
+  normalizePlanCode(shop.plan) === 'SIN_PLAN';
+const canAutoValidateSelfRegisteredShop = (shop: {
+  status: ShopStatus;
+  active: boolean;
+  registrationSource: ShopRegistrationSource;
+  verificationState: ShopVerificationState;
+}) =>
+  shop.active !== false &&
+  shop.registrationSource === ShopRegistrationSource.SELF_SERVICE &&
+  shop.status === ShopStatus.PENDING_VERIFICATION &&
+  shop.verificationState !== ShopVerificationState.VERIFIED;
 const isStoreRoleEligibleByShopState = (shop: { status: ShopStatus; active: boolean }) => {
   if (shop.active === false) return false;
   if (shop.status === ShopStatus.BANNED || shop.status === ShopStatus.HIDDEN) return false;
@@ -83,6 +112,7 @@ const buildContext = (input: {
   userType: AuthUserType;
   role: AuthRole;
   status: AuthUserStatus;
+  emailVerified?: boolean;
   shopId?: string;
   adminRole?: AdminRole;
 }): AuthContext => ({
@@ -119,7 +149,11 @@ const syncAuthUserBase = async (
   });
 };
 
-export const resolveAuthContext = async (uid: string, email: string): Promise<AuthContext> => {
+export const resolveAuthContext = async (
+  uid: string,
+  email: string,
+  emailVerified = false
+): Promise<AuthContext> => {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) {
     throw new Error('Email requerido para autenticar.');
@@ -171,6 +205,7 @@ export const resolveAuthContext = async (uid: string, email: string): Promise<Au
     return buildContext({
       uid,
       email: normalizedEmail,
+      emailVerified,
       authUserId: authUser.id,
       userType: AuthUserType.ADMIN,
       role,
@@ -179,10 +214,63 @@ export const resolveAuthContext = async (uid: string, email: string): Promise<Au
     });
   }
 
-  const linkedShopByOwner = await prisma.shop.findFirst({
+  let linkedShopByOwner = await prisma.shop.findFirst({
     where: { authUserId: authUser.id },
-    select: { id: true, status: true, active: true },
+    select: {
+      id: true,
+      status: true,
+      active: true,
+      plan: true,
+      planTier: true,
+      registrationSource: true,
+      verificationState: true,
+      visibilityState: true,
+    },
   });
+
+  const linkedShopSnapshot = linkedShopByOwner;
+  if (linkedShopSnapshot && emailVerified && canAutoValidateSelfRegisteredShop(linkedShopSnapshot)) {
+    linkedShopByOwner = await prisma.$transaction(async (tx) => {
+      const nextVisibility = isNoPlanShop(linkedShopSnapshot)
+        ? ShopVisibilityState.DIMMED
+        : ShopVisibilityState.LIT;
+      const updatedShop = await tx.shop.update({
+        where: { id: linkedShopSnapshot.id },
+        data: {
+          status: ShopStatus.ACTIVE,
+          verificationState: ShopVerificationState.VERIFIED,
+          visibilityState: nextVisibility,
+          statusReason: null,
+          statusChangedAt: new Date(),
+          ownerAcceptedAt: new Date(),
+          active: true,
+        },
+        select: {
+          id: true,
+          status: true,
+          active: true,
+          plan: true,
+          planTier: true,
+          registrationSource: true,
+          verificationState: true,
+          visibilityState: true,
+        },
+      });
+
+      await tx.authUser.update({
+        where: { id: authUser.id },
+        data: {
+          userType: AuthUserType.SHOP,
+          role: AuthRole.STORE,
+          status: AuthUserStatus.ACTIVE,
+          onboardingCompletedAt: new Date(),
+          lastLoginAt: new Date(),
+          firebaseUid: uid,
+        },
+      });
+      return updatedShop;
+    });
+  }
 
   if (linkedShopByOwner) {
     const canOperateAsStore = isStoreRoleEligibleByShopState(linkedShopByOwner);
@@ -196,6 +284,7 @@ export const resolveAuthContext = async (uid: string, email: string): Promise<Au
     return buildContext({
       uid,
       email: normalizedEmail,
+      emailVerified,
       authUserId: authUser.id,
       userType,
       role,
@@ -232,6 +321,7 @@ export const resolveAuthContext = async (uid: string, email: string): Promise<Au
   return buildContext({
     uid,
     email: normalizedEmail,
+    emailVerified,
     authUserId: authUser.id,
     userType: AuthUserType.CLIENT,
     role,
@@ -240,7 +330,7 @@ export const resolveAuthContext = async (uid: string, email: string): Promise<Au
 };
 
 export const completeOnboardingIntent = async (
-  params: { authUserId: string; uid: string; email: string },
+  params: { authUserId: string; uid: string; email: string; emailVerified?: boolean },
   intent: OnboardingIntent
 ) => {
   const normalizedIntent = String(intent || '').trim().toUpperCase();
@@ -303,7 +393,20 @@ export const completeOnboardingIntent = async (
     });
   });
 
-  return resolveAuthContext(params.uid, normalizedEmail);
+  const context = await resolveAuthContext(params.uid, normalizedEmail, Boolean(params.emailVerified));
+
+  if (normalizedIntent === 'USER') {
+    try {
+      const template = buildUserWelcomeEmailTemplate({
+        appUrl: resolveAppUrl(),
+      });
+      await sendEmailTemplate(normalizedEmail, template);
+    } catch (error) {
+      console.error(`[auth:onboarding] No se pudo enviar bienvenida de usuario a ${normalizedEmail}:`, error);
+    }
+  }
+
+  return context;
 };
 
 export const listAuthUsersAdmin = async (limitInput?: number) => {
@@ -430,11 +533,45 @@ export const requestEmailVerification = async (inputEmail: string) => {
   }
 
   if (verifyUrl) {
-    const template = buildEmailVerificationEmailTemplate({
-      verifyUrl,
-      appUrl: resolveAppUrl(),
-    });
-    await sendEmailTemplate(email, template, { requireConfigured: true });
+    const appUrl = resolveAppUrl();
+    const [authUser, shop] = await Promise.all([
+      prisma.authUser.findUnique({
+        where: { email },
+        select: { role: true },
+      }),
+      prisma.shop.findFirst({
+        where: {
+          OR: [
+            { email: { equals: email, mode: 'insensitive' } },
+            { contactEmailPrivate: { equals: email, mode: 'insensitive' } },
+          ],
+        },
+        select: { name: true },
+      }),
+    ]);
+
+    const isStoreAudience =
+      Boolean(shop) || authUser?.role === AuthRole.PENDING_STORE || authUser?.role === AuthRole.STORE;
+
+    const template = isStoreAudience
+      ? buildStoreEmailVerificationTemplate({
+          shopName: shop?.name || 'Tu tienda',
+          verifyUrl,
+          appUrl,
+        })
+      : buildUserEmailVerificationTemplate({
+          verifyUrl,
+          appUrl,
+        });
+
+    // Fallback legacy in case downstream changes expect generic content.
+    const safeTemplate =
+      template ||
+      buildEmailVerificationEmailTemplate({
+        verifyUrl,
+        appUrl,
+      });
+    await sendEmailTemplate(email, safeTemplate, { requireConfigured: true });
   }
 
   return { ok: true };

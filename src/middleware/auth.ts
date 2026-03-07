@@ -20,7 +20,11 @@ export const optionalAuth = async (req: Request, res: Response, next: NextFuncti
       req.auth = null;
       return res.status(401).json({ message: 'Token sin email valido.' });
     }
-    const context = await resolveAuthContext(decoded.uid, decoded.email);
+    const context = await resolveAuthContext(
+      decoded.uid,
+      decoded.email,
+      Boolean((decoded as any).email_verified)
+    );
     if (context.status === 'SUSPENDED') {
       req.auth = null;
       return res.status(403).json({ message: 'Usuario suspendido.' });
@@ -44,7 +48,7 @@ export const requireAdmin = (req: Request, res: Response, next: NextFunction) =>
   if (!req.auth) {
     return res.status(401).json({ message: 'Autenticacion requerida.' });
   }
-  if (req.auth.userType !== 'ADMIN') {
+  if (req.auth.role !== 'ADMIN' && req.auth.role !== 'SUPERADMIN') {
     return res.status(403).json({ message: 'Permisos insuficientes.' });
   }
   return next();
@@ -55,8 +59,8 @@ export const requireShopOrAdmin = (shopIdResolver: (req: Request) => string | un
     if (!req.auth) {
       return res.status(401).json({ message: 'Autenticacion requerida.' });
     }
-    if (req.auth.userType === 'ADMIN') return next();
-    if (req.auth.userType === 'SHOP') {
+    if (req.auth.role === 'ADMIN' || req.auth.role === 'SUPERADMIN') return next();
+    if (req.auth.role === 'STORE') {
       const shopId = shopIdResolver(req);
       if (!shopId || req.auth.shopId !== shopId) {
         return res.status(403).json({ message: 'Acceso denegado.' });

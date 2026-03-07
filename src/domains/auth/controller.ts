@@ -45,6 +45,7 @@ export const completeOnboarding = async (req: Request, res: Response) => {
         authUserId: req.auth.authUserId,
         uid: req.auth.uid,
         email: req.auth.email,
+        emailVerified: Boolean(req.auth.emailVerified),
       },
       intent as AuthService.OnboardingIntent
     );

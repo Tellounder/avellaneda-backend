@@ -260,11 +260,13 @@ model Client {
   authUserId  String   @id
   authUser    AuthUser @relation(fields: [authUserId], references: [id])
   displayName String?
+  username    String?  @unique
   avatarUrl   String?
   phone       String?
   city        String?
   province    String?
   instagramHandle String?
+  onboardingTermsAcceptedAt DateTime?
   birthDate   DateTime?
   styleTags   String[] @default([])
   profileCompletedAt DateTime?
@@ -273,15 +275,6 @@ model Client {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
-
-model User {
-  id            String         @id @default(uuid())
-  name          String
-  email         String         @unique
-  createdAt     DateTime       @default(now())
-}
-
-// Dentro de prisma/schema.prisma
 
 model Shop {
   id              String   @id @default(uuid())

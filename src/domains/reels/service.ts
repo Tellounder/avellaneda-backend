@@ -5,6 +5,8 @@ import {
   QuotaRefType,
   QuotaResource,
   ReelStatus,
+  ShopPlanTier,
+  ShopStatus,
   ReelType,
   SocialPlatform,
 } from '@prisma/client';
@@ -20,6 +22,12 @@ const normalizePlatform = (value: unknown): SocialPlatform => {
   }
   return 'Instagram';
 };
+
+const normalizePlanCode = (value: unknown) => String(value || '').trim().toUpperCase();
+const isShopWithoutPlan = (shop: { plan?: unknown; planTier?: ShopPlanTier | null }) =>
+  shop.planTier === ShopPlanTier.NONE ||
+  normalizePlanCode(shop.plan) === 'MAP_ONLY' ||
+  normalizePlanCode(shop.plan) === 'SIN_PLAN';
 
 const SHOP_PUBLIC_SELECT = {
   id: true,
@@ -399,6 +407,22 @@ export const createReel = async (
   if (normalizedType === ReelType.PHOTO_SET) {
     for (const url of photoUrls) {
       await ensureMediaUrlReady(url, 'image');
+    }
+  }
+
+  if (!isAdminOverride) {
+    const shop = await prisma.shop.findUnique({
+      where: { id: input.shopId },
+      select: { id: true, active: true, status: true, plan: true, planTier: true },
+    });
+    if (!shop) {
+      throw new Error('Tienda no encontrada.');
+    }
+    if (!shop.active || shop.status !== ShopStatus.ACTIVE) {
+      throw new Error('La tienda no esta habilitada para publicar reels.');
+    }
+    if (isShopWithoutPlan(shop)) {
+      throw new Error('Tu tienda esta en SIN PLAN. Asigna un plan para habilitar reels.');
     }
   }
 

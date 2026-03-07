@@ -251,6 +251,9 @@ export const selfRegisterShop = async (req: Request, res: Response) => {
     const data = await ShopsService.createSelfRegisteredShop(req.body, {
       ip: req.ip,
       userAgent,
+      authUserId: req.auth?.authUserId || null,
+      authRole: req.auth?.role || null,
+      authEmailVerified: Boolean(req.auth?.emailVerified),
     });
     res.status(201).json(sanitizeShopPayload(data, req));
   } catch (error: any) {

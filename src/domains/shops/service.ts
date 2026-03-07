@@ -26,7 +26,8 @@ import { firebaseAuth, firebaseReady } from '../../lib/firebaseAdmin';
 import { resolvePlanTier } from './plan';
 import { resolveAppUrl, sendEmailTemplate } from '../../services/email.service';
 import {
-  buildSelfRegisterConfirmationEmailTemplate,
+  buildStoreEmailVerificationTemplate,
+  buildStoreGoogleWelcomeEmailTemplate,
   buildShopInviteEmailTemplate,
   buildShopPasswordResetEmailTemplate,
 } from '../../services/emailTemplates';
@@ -847,11 +848,34 @@ export const getWhatsappLimit = (plan: unknown) => {
   return PLAN_WHATSAPP_LIMIT[tier] || 1;
 };
 
+const normalizePlanCode = (value: unknown) => String(value || '').trim().toUpperCase();
+
 const resolveShopPlanTier = (plan: unknown) => {
+  const normalizedCode = normalizePlanCode(plan);
+  if (
+    normalizedCode === 'SIN_PLAN' ||
+    normalizedCode === 'MAP_ONLY' ||
+    normalizedCode === 'NONE' ||
+    normalizedCode === 'NO_PLAN'
+  ) {
+    return ShopPlanTier.NONE;
+  }
   const tier = resolvePlanTier(plan);
   if (tier === 'maxima') return ShopPlanTier.MAXIMA;
   if (tier === 'alta') return ShopPlanTier.MEDIA;
   return ShopPlanTier.BASICO;
+};
+
+const isShopWithoutPlan = (shop: { plan?: unknown; planTier?: ShopPlanTier | null }) =>
+  shop.planTier === ShopPlanTier.NONE ||
+  normalizePlanCode(shop.plan) === 'MAP_ONLY' ||
+  normalizePlanCode(shop.plan) === 'SIN_PLAN';
+const assertShopHasOperationalPlan = (shop: { plan?: unknown; planTier?: ShopPlanTier | null }) => {
+  if (isShopWithoutPlan(shop)) {
+    throw new Error(
+      'Tu tienda esta en SIN PLAN. Asigna un plan para habilitar compras, reels y vivos.'
+    );
+  }
 };
 
 export const filterSocialHandlesByPlan = (
@@ -1360,10 +1384,9 @@ export const getShopsMapData = async () => {
   const shops = await prisma.shop.findMany({
     where: {
       active: true,
-      OR: [
-        { status: ShopStatus.ACTIVE },
-        { visibilityState: ShopVisibilityState.DIMMED },
-      ],
+      status: ShopStatus.ACTIVE,
+      verificationState: ShopVerificationState.VERIFIED,
+      visibilityState: { in: [ShopVisibilityState.LIT, ShopVisibilityState.DIMMED] },
     },
     include: {
       socialHandles: true,
@@ -1372,6 +1395,8 @@ export const getShopsMapData = async () => {
   });
 
   return shops.map((shop) => {
+    const isNoPlan = isShopWithoutPlan(shop);
+    const effectiveVisibilityState = isNoPlan ? ShopVisibilityState.DIMMED : shop.visibilityState;
     const filteredHandles = filterSocialHandlesByPlan(shop.plan, shop.socialHandles || []);
     const details = (shop.addressDetails || {}) as Record<string, unknown>;
     const street = getAddressField(details, 'street');
@@ -1383,7 +1408,7 @@ export const getShopsMapData = async () => {
     const canonicalAddress = buildCanonicalAddress(details, addressDisplay);
     const mapsUrl = toMapString(details.mapsUrl);
     const publicContactsEnabled =
-      shop.contactsPublic !== false && shop.visibilityState !== ShopVisibilityState.DIMMED;
+      shop.contactsPublic !== false && effectiveVisibilityState !== ShopVisibilityState.DIMMED && !isNoPlan;
     const effectiveHandles = publicContactsEnabled ? filteredHandles : [];
     const whatsapp = publicContactsEnabled ? shop.whatsappLines?.[0]?.number || '' : '';
     const legacyUid = toMapString(details.legacyUid || '');
@@ -1408,7 +1433,10 @@ export const getShopsMapData = async () => {
       'Ciudad': city,
       'Provincia': province,
       'Plan de Suscripcion': toMapString(shop.plan),
-      'Estado de visibilidad': toMapString(shop.visibilityState),
+      'Estado de visibilidad': toMapString(effectiveVisibilityState),
+      'plan': toMapString(shop.plan),
+      'planTier': toMapString(shop.planTier),
+      'isNoPlan': isNoPlan,
       'Logo_URL': toMapString(shop.logoUrl),
       'imagen_destacada_url': toMapString(shop.coverUrl),
       'url_catalogo': toMapString(details.catalogUrl),
@@ -1457,10 +1485,9 @@ export const getPublicShops = async (options?: { limit?: number; offset?: number
   const shops = await prisma.shop.findMany({
     where: {
       active: true,
-      OR: [
-        { status: ShopStatus.ACTIVE },
-        { visibilityState: ShopVisibilityState.DIMMED },
-      ],
+      status: ShopStatus.ACTIVE,
+      verificationState: ShopVerificationState.VERIFIED,
+      visibilityState: { in: [ShopVisibilityState.LIT, ShopVisibilityState.DIMMED] },
     },
     orderBy: { name: 'asc' },
     select: shopPublicSelect,
@@ -1497,10 +1524,9 @@ export const getPublicShopsByLetter = async (
   const shops = await prisma.shop.findMany({
     where: {
       active: true,
-      OR: [
-        { status: ShopStatus.ACTIVE },
-        { visibilityState: ShopVisibilityState.DIMMED },
-      ],
+      status: ShopStatus.ACTIVE,
+      verificationState: ShopVerificationState.VERIFIED,
+      visibilityState: { in: [ShopVisibilityState.LIT, ShopVisibilityState.DIMMED] },
       name: {
         startsWith: initial,
         mode: 'insensitive',
@@ -1640,6 +1666,7 @@ export const createSelfRegisteredShop = async (
     userAgent?: string | null;
     authUserId?: string | null;
     authRole?: AuthRole | null;
+    authEmailVerified?: boolean | null;
   }
 ) => {
   const storeName = normalizeText(input?.storeName);
@@ -1668,6 +1695,14 @@ export const createSelfRegisteredShop = async (
     context?.authRole !== AuthRole.SUPERADMIN
       ? context.authUserId
       : null;
+  const canAutoVerifyOwner = Boolean(ownerAuthUserId && context?.authEmailVerified);
+  const initialStatus = canAutoVerifyOwner
+    ? ShopStatus.ACTIVE
+    : ShopStatus.PENDING_VERIFICATION;
+  const initialVerificationState = canAutoVerifyOwner
+    ? ShopVerificationState.VERIFIED
+    : ShopVerificationState.UNVERIFIED;
+  const initialVisibilityState = ShopVisibilityState.DIMMED;
 
   if (!storeName || storeName.length < SELF_REGISTER_MIN_STORE_NAME_LEN) {
     throw createSelfRegisterError(400, 'Nombre de tienda invalido.', {
@@ -1913,10 +1948,10 @@ export const createSelfRegisteredShop = async (
         website,
         plan: 'MAP_ONLY',
         planTier: ShopPlanTier.NONE,
-        status: ShopStatus.PENDING_VERIFICATION,
+        status: initialStatus,
         registrationSource: ShopRegistrationSource.SELF_SERVICE,
-        visibilityState: ShopVisibilityState.DIMMED,
-        verificationState: ShopVerificationState.UNVERIFIED,
+        visibilityState: initialVisibilityState,
+        verificationState: initialVerificationState,
         contactsPublic: false,
         contactEmailPrivate: email,
         contactWhatsappPrivate: whatsapp,
@@ -1952,7 +1987,7 @@ export const createSelfRegisteredShop = async (
         },
         minimumPurchase: 0,
         paymentMethods: [],
-        statusReason: 'Autoregistro pendiente de revision.',
+        statusReason: canAutoVerifyOwner ? null : 'Autoregistro pendiente de revision.',
         statusChangedAt: new Date(),
         streamQuota: 0,
         reelQuota: 0,
@@ -1962,6 +1997,9 @@ export const createSelfRegisteredShop = async (
       },
       select: shopPrivateSelect,
     });
+    if (canAutoVerifyOwner) {
+      await syncAuthUserStatus(created.authUserId, created.status, created.active, tx);
+    }
     return created;
   });
 
@@ -1971,24 +2009,43 @@ export const createSelfRegisteredShop = async (
   });
 
   try {
-    let activationUrl = resolveAppUrl();
-    try {
-      await ensureFirebaseUser(email);
-      activationUrl = await generateShopResetLink(email, 'self_register');
-    } catch (error) {
-      console.error(
-        `[shops:self-register] No se pudo generar reset link para ${email}. Se envia fallback a appUrl:`,
-        error
-      );
-    }
+    const appUrl = resolveAppUrl();
+    const baseAppUrl = appUrl.replace(/\/+$/g, '');
+    const isAuthenticatedFlow = Boolean(ownerAuthUserId);
 
-    const confirmationTemplate = buildSelfRegisterConfirmationEmailTemplate({
-      shopName: createdShop.name,
-      addressDisplay: createdShop.addressDisplay || createdShop.address || 'Direccion informada',
-      appUrl: resolveAppUrl(),
-      activationUrl,
-    });
-    await sendEmailTemplate(email, confirmationTemplate);
+    if (isAuthenticatedFlow) {
+      const mapStatusText =
+        createdShop.status === ShopStatus.PENDING_VERIFICATION
+          ? 'registro recibido y pendiente de revision administrativa'
+          : createdShop.visibilityState === ShopVisibilityState.DIMMED
+            ? 'visible en modo estatico'
+            : 'registro confirmado';
+      const googleTemplate = buildStoreGoogleWelcomeEmailTemplate({
+        shopName: createdShop.name,
+        appUrl,
+        shopUrl: `${baseAppUrl}/tiendas/${createdShop.id}`,
+        mapStatusText,
+      });
+      await sendEmailTemplate(email, googleTemplate);
+    } else {
+      let activationUrl = appUrl;
+      try {
+        await ensureFirebaseUser(email);
+        activationUrl = await generateShopResetLink(email, 'self_register');
+      } catch (error) {
+        console.error(
+          `[shops:self-register] No se pudo generar reset link para ${email}. Se envia fallback a appUrl:`,
+          error
+        );
+      }
+
+      const verificationTemplate = buildStoreEmailVerificationTemplate({
+        shopName: createdShop.name,
+        verifyUrl: activationUrl,
+        appUrl,
+      });
+      await sendEmailTemplate(email, verificationTemplate);
+    }
   } catch (error) {
     console.error(`[shops:self-register] No se pudo enviar confirmacion por email a ${email}:`, error);
   }
@@ -2188,6 +2245,23 @@ export const updateShop = async (id: string, data: any) => {
     }
   }
 
+  const hasPlanUpdate = data.plan !== undefined;
+  const nextPlanRaw = hasPlanUpdate ? String(data.plan || '').trim() : undefined;
+  const nextPlan = hasPlanUpdate
+    ? (() => {
+        const normalized = normalizePlanCode(nextPlanRaw);
+        if (
+          normalized === 'SIN_PLAN' ||
+          normalized === 'MAP_ONLY' ||
+          normalized === 'NONE' ||
+          normalized === 'NO_PLAN'
+        ) {
+          return 'SIN_PLAN';
+        }
+        return nextPlanRaw || 'SIN_PLAN';
+      })()
+    : undefined;
+
   const updateData: any = {
     name: data.name,
     razonSocial: data.razonSocial,
@@ -2206,8 +2280,8 @@ export const updateShop = async (id: string, data: any) => {
     agendaSuspendedUntil: data.agendaSuspendedUntil,
     agendaSuspendedByAdminId: data.agendaSuspendedByAdminId,
     agendaSuspendedReason: data.agendaSuspendedReason,
-    plan: data.plan,
-    planTier: data.plan !== undefined ? resolveShopPlanTier(data.plan) : undefined,
+    plan: nextPlan,
+    planTier: hasPlanUpdate ? resolveShopPlanTier(nextPlan) : undefined,
     registrationSource: data.registrationSource,
     visibilityState: data.visibilityState,
     verificationState: data.verificationState,
@@ -2239,7 +2313,7 @@ export const updateShop = async (id: string, data: any) => {
   }
 
   return prisma.$transaction(async (tx) => {
-    const shouldSyncPlanQuota = data.plan !== undefined;
+    const shouldSyncPlanQuota = hasPlanUpdate;
     const updatedShop = await tx.shop.update({
       where: { id },
       data: updateData,
@@ -2256,6 +2330,31 @@ export const updateShop = async (id: string, data: any) => {
 
     if (shouldSyncPlanQuota) {
       await syncQuotaWalletToPlan(updatedShop.id, updatedShop.plan, tx);
+    }
+
+    if (shouldSyncPlanQuota && data.visibilityState === undefined) {
+      const isNoPlan = isShopWithoutPlan(updatedShop);
+      const shouldDim = isNoPlan && updatedShop.visibilityState !== ShopVisibilityState.DIMMED;
+      const shouldRelight =
+        !isNoPlan &&
+        updatedShop.status === ShopStatus.ACTIVE &&
+        updatedShop.verificationState === ShopVerificationState.VERIFIED &&
+        updatedShop.visibilityState === ShopVisibilityState.DIMMED;
+
+      if (shouldDim || shouldRelight) {
+        const adjusted = await tx.shop.update({
+          where: { id: updatedShop.id },
+          data: {
+            visibilityState: shouldDim ? ShopVisibilityState.DIMMED : ShopVisibilityState.LIT,
+          },
+          include: {
+            socialHandles: true,
+            whatsappLines: true,
+            penalties: true,
+          },
+        });
+        return adjusted;
+      }
     }
 
     return updatedShop;
@@ -2361,11 +2460,12 @@ export const buyStreamQuota = async (id: string, amount: number, actor?: { userT
 
   const shop = await prisma.shop.findUnique({
     where: { id },
-    select: { status: true, agendaSuspendedUntil: true },
+    select: { status: true, agendaSuspendedUntil: true, plan: true, planTier: true },
   });
   if (!shop) {
     throw new Error('Tienda no encontrada.');
   }
+  assertShopHasOperationalPlan(shop);
   if (computeAgendaSuspended({ status: shop.status, agendaSuspendedUntil: shop.agendaSuspendedUntil })) {
     throw new Error('Agenda suspendida: no puedes comprar cupos de vivos.');
   }
@@ -2423,11 +2523,12 @@ export const buyReelQuota = async (id: string, amount: number, actor?: { userTyp
 
   const shop = await prisma.shop.findUnique({
     where: { id },
-    select: { status: true, agendaSuspendedUntil: true },
+    select: { status: true, agendaSuspendedUntil: true, plan: true, planTier: true },
   });
   if (!shop) {
     throw new Error('Tienda no encontrada.');
   }
+  assertShopHasOperationalPlan(shop);
 
   const result = await prisma.$transaction(async (tx) => {
     const purchase = await tx.purchaseRequest.create({

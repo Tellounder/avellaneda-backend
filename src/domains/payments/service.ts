@@ -1,5 +1,13 @@
 import crypto from 'crypto';
-import { AuthUserType, NotificationType, PurchaseStatus, PurchaseType, QuotaActorType, QuotaRefType } from '@prisma/client';
+import {
+  AuthUserType,
+  NotificationType,
+  PurchaseStatus,
+  PurchaseType,
+  QuotaActorType,
+  QuotaRefType,
+  ShopPlanTier,
+} from '@prisma/client';
 import prisma from './repo';
 import { computeAgendaSuspended, creditLiveExtra, creditReelExtra, syncQuotaWalletToPlan } from '../../services/quota.service';
 import { createNotification } from '../notifications/service';
@@ -29,6 +37,12 @@ const MP_PRICE_LIVE = Number(process.env.MP_PRICE_LIVE || '');
 const MP_PRICE_REEL = Number(process.env.MP_PRICE_REEL || '');
 const MP_PRICE_PLAN_ALTA = Number(process.env.MP_PRICE_PLAN_ALTA || '');
 const MP_PRICE_PLAN_MAXIMA = Number(process.env.MP_PRICE_PLAN_MAXIMA || process.env.MP_PRICE_PLAN_PRO || '');
+
+const normalizePlanCode = (value: unknown) => String(value || '').trim().toUpperCase();
+const isShopWithoutPlan = (shop: { plan?: unknown; planTier?: ShopPlanTier | null }) =>
+  shop.planTier === ShopPlanTier.NONE ||
+  normalizePlanCode(shop.plan) === 'MAP_ONLY' ||
+  normalizePlanCode(shop.plan) === 'SIN_PLAN';
 
 const isTestAccessToken = () => MP_ACCESS_TOKEN.startsWith('TEST-');
 
@@ -120,7 +134,7 @@ const createPurchaseRequest = async (
 
   const shop = await prisma.shop.findUnique({
     where: { id: shopId },
-    select: { status: true, agendaSuspendedUntil: true, plan: true },
+    select: { status: true, agendaSuspendedUntil: true, plan: true, planTier: true },
   });
 
   if (!shop) {
@@ -128,9 +142,15 @@ const createPurchaseRequest = async (
   }
 
   if (type === PurchaseType.LIVE_PACK) {
+    if (isShopWithoutPlan(shop)) {
+      throw new Error('Tu tienda esta en SIN PLAN. Asigna un plan para habilitar compras.');
+    }
     if (computeAgendaSuspended({ status: shop.status, agendaSuspendedUntil: shop.agendaSuspendedUntil })) {
       throw new Error('Agenda suspendida: no puedes comprar cupos de vivos.');
     }
+  }
+  if (type === PurchaseType.REEL_PACK && isShopWithoutPlan(shop)) {
+    throw new Error('Tu tienda esta en SIN PLAN. Asigna un plan para habilitar compras.');
   }
 
   const notes = meta?.targetPlan ? `PLAN:${meta.targetPlan}` : undefined;

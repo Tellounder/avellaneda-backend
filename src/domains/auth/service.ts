@@ -121,14 +121,6 @@ const buildContext = (input: {
   nextAction: resolveNextAction(input.role),
 });
 
-const ensureClientProfile = async (authUserId: string) => {
-  await prisma.client.upsert({
-    where: { authUserId },
-    update: {},
-    create: { authUserId },
-  });
-};
-
 const syncAuthUserBase = async (
   authUserId: string,
   patch: Partial<{
@@ -308,10 +300,6 @@ export const resolveAuthContext = async (
     role = AuthRole.USER;
   }
 
-  if (role === AuthRole.USER && !hasClientProfile) {
-    await ensureClientProfile(authUser.id);
-  }
-
   await syncAuthUserBase(authUser.id, {
     userType: AuthUserType.CLIENT,
     role,
@@ -368,11 +356,6 @@ export const completeOnboardingIntent = async (
           firebaseUid: params.uid,
           lastLoginAt: new Date(),
         },
-      });
-      await tx.client.upsert({
-        where: { authUserId: authUser.id },
-        update: {},
-        create: { authUserId: authUser.id },
       });
       return;
     }
